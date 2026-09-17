@@ -122,12 +122,3 @@ def load_benchmark(data_dir):
     queries["query_id"] = queries["query_id"].astype(str)
     items = prepare_item_columns(pd.read_parquet(data_dir / "benchmark_items.parquet"))
     return queries, items
-
-
-def item_texts(items: pd.DataFrame, desc_max_chars: int) -> dict:
-    """Текстовые поля объявления для индексов."""
-    return {
-        "title": items["item_title_raw"].tolist(),
-        "params": items["item_infm_params_text"].tolist(),
-        "desc": [d[:desc_max_chars] for d in items["item_description_raw"]],
-    }

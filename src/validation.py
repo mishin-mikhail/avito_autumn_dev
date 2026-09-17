@@ -1,105 +1,114 @@
 """
 Локальная валидация: псевдо-бенчмарк из train.
 
-Идея. Бенчмарк — это ~2.5 тыс. «запросов» (групп признаков запроса), у каждого
-1–2+ выбранных объявления. Часть текстов запросов бенчмарка встречается в train
-(«знакомые»), часть — нет («новые»). Для знакомых работают статистики из train,
-для новых — нет, поэтому валидация должна повторять ту же пропорцию, иначе
-оценка будет смещённой.
+«Запрос» = группа строк train с одинаковым query_key. Валидация повторяет
+состав бенчмарка по трём осям, от которых сильно зависит качество:
+  * текст запроса знакомый (встречается в train) или новый;
+  * есть ли у запроса фильтры;
+  * тип локации поиска: «обычная» (бывает у объявлений) или «только поисковая»
+    (региональный id, у объявлений не встречается).
+Доли ячеек берутся из бенчмарка, отбор внутри ячейки — по md5 (детерминированно).
 
-Схема (всё детерминировано через md5):
-  1. доля text_holdout_frac текстов убирается из train целиком → кандидаты в «новые»;
-  2. из остальных групп берутся «знакомые»: их текст продолжает встречаться в train
-     в других группах (как у знакомых запросов бенчмарка);
-  3. число новых и знакомых подбирается под долю знакомых в бенчмарке.
+Как получаются «новые» и «знакомые» запросы:
+  * доля text_holdout_frac текстов убирается из train целиком → кандидаты в новые;
+  * знакомые — группы, чей текст остаётся в train в других группах.
 """
 import numpy as np
 import pandas as pd
 
 from .repro import md5_hex
 
-
-def seen_share(query_texts, train_texts) -> float:
-    """Доля запросов, чей нормализованный текст встречается в train."""
-    known = pd.Index(pd.unique(np.asarray(train_texts, dtype=object)))
-    return float(pd.Index(query_texts).isin(known).mean())
+SEEN, UNSEEN = "знакомый", "новый"
 
 
-def build_validation_split(train: pd.DataFrame, bench_seen_share: float, n_val: int,
+def add_query_segments(df: pd.DataFrame, item_locations: pd.Index) -> pd.DataFrame:
+    """seg_filter и seg_loc (seg_text зависит от разбиения и ставится отдельно)."""
+    df["seg_filter"] = np.where(df["filters_norm"] != "", "фильтр есть", "фильтра нет")
+    df["seg_loc"] = np.where(df["search_location_id"].isin(item_locations),
+                             "локация обычная", "локация только поисковая")
+    df["stratum"] = df["seg_filter"] + " | " + df["seg_loc"]
+    return df
+
+
+def mark_seen(df: pd.DataFrame, known_texts) -> pd.DataFrame:
+    df["seg_text"] = np.where(df["norm_text"].isin(pd.Index(known_texts)), SEEN, UNSEEN)
+    return df
+
+
+def _allocate(shares: pd.Series, n: int) -> pd.Series:
+    """Разбивает n по долям методом наибольших остатков (сумма ровно n, без случайности)."""
+    raw = shares.sort_index() / shares.sum() * n
+    base = np.floor(raw).astype(int)
+    extra = (raw - base).sort_values(ascending=False, kind="stable").index[: n - int(base.sum())]
+    base.loc[extra] += 1
+    return base
+
+
+def build_validation_split(train: pd.DataFrame, bench_q: pd.DataFrame, n_val: int,
                            text_holdout_frac: float, salt: str):
     """
     Возвращает:
-      val_keys   — список query_key валидационных запросов (в md5-порядке);
-      fold_mask  — булев массив по строкам train: True = строка идёт в «train-фолд»;
-      info       — словарь со статистикой разбиения.
+      val_keys   — query_key валидационных запросов (в md5-порядке);
+      val_seen   — словарь query_key → «знакомый»/«новый»;
+      fold_mask  — булев массив по строкам train: True = строка идёт в train-фолд;
+      report     — таблица «цель vs факт» по ячейкам стратификации.
     """
-    # --- 1. тексты, целиком убранные из train ---
+    # 1. тексты, целиком убранные из train
     texts = pd.unique(train["norm_text"].to_numpy(dtype=object))
-    t_hash = np.array([int(md5_hex(f"{salt}|t|{t}")[:12], 16) / float(1 << 48) for t in texts])
-    ho_texts = pd.Index(texts[t_hash < text_holdout_frac])
-    row_ho = train["norm_text"].isin(ho_texts).to_numpy()
+    t_unit = np.array([int(md5_hex(f"{salt}|t|{t}")[:12], 16) / float(1 << 48) for t in texts])
+    holdout_texts = pd.Index(texts[t_unit < text_holdout_frac])
+    row_holdout = train["norm_text"].isin(holdout_texts).to_numpy()
 
-    # --- таблица групп в md5-порядке ---
-    groups = train[["query_key", "norm_text"]].drop_duplicates("query_key").copy()
+    # 2. группы в md5-порядке
+    groups = train[["query_key", "norm_text", "stratum"]].drop_duplicates("query_key").copy()
     groups["h"] = [md5_hex(f"{salt}|g|{k}") for k in groups["query_key"]]
     groups = groups.sort_values(["h", "query_key"], kind="stable").reset_index(drop=True)
-    g_ho = groups["norm_text"].isin(ho_texts)
+    in_holdout = groups["norm_text"].isin(holdout_texts)
 
-    n_unseen = int(round(n_val * (1.0 - bench_seen_share)))
-    n_seen = n_val - n_unseen
+    unseen_pool = groups[in_holdout]
+    # у знакомого запроса текст должен остаться хотя бы в одной группе train-фолда
+    seen_pool = groups[~in_holdout]
+    n_groups = seen_pool["norm_text"].map(seen_pool["norm_text"].value_counts()).to_numpy()
+    rank_in_text = seen_pool.groupby("norm_text", sort=False).cumcount().to_numpy()
+    seen_pool = seen_pool[rank_in_text < n_groups - 1]
 
-    # --- 2. «новые» запросы: группы убранных текстов ---
-    unseen = groups.loc[g_ho, "query_key"].head(n_unseen).tolist()
+    # 3. отбор по ячейкам в пропорциях бенчмарка
+    target = _allocate(bench_q.groupby(["seg_text", "stratum"]).size(), n_val)
+    picked, rows = [], []
+    for (seg_text, stratum), n in target.items():
+        pool = unseen_pool if seg_text == UNSEEN else seen_pool
+        chosen = pool.loc[pool["stratum"] == stratum, ["query_key", "h"]].head(n)
+        picked.append(chosen.assign(seg_text=seg_text))
+        rows.append((seg_text, stratum, int(n), len(chosen)))
+    picked = pd.concat(picked).sort_values(["h", "query_key"], kind="stable")
 
-    # --- 3. «знакомые»: у текста должна остаться хотя бы одна группа в train-фолде ---
-    cand = groups.loc[~g_ho].copy()
-    n_groups_per_text = cand["norm_text"].map(cand["norm_text"].value_counts())
-    rank_in_text = cand.groupby("norm_text", sort=False).cumcount()
-    allowed = cand[rank_in_text.to_numpy() < n_groups_per_text.to_numpy() - 1]
-    seen = allowed["query_key"].head(n_seen).tolist()
+    report = pd.DataFrame(rows, columns=["текст", "страта", "цель", "факт"])
+    if (report["факт"] < report["цель"]).any():
+        print("[warn] в некоторых ячейках не хватило групп — см. таблицу")
 
-    if len(unseen) < n_unseen or len(seen) < n_seen:
-        print(f"[warn] не хватило групп: новых {len(unseen)}/{n_unseen}, знакомых {len(seen)}/{n_seen}")
-
-    val_keys = unseen + seen
-    row_val_seen = train["query_key"].isin(pd.Index(seen)).to_numpy()
-    fold_mask = ~(row_ho | row_val_seen)
-    info = {
-        "n_val": len(val_keys), "n_unseen": len(unseen), "n_seen": len(seen),
-        "bench_seen_share": bench_seen_share,
-        "n_holdout_texts": len(ho_texts),
-        "train_rows_total": int(len(train)), "train_rows_fold": int(fold_mask.sum()),
-    }
-    return val_keys, fold_mask, info
+    seen_keys = pd.Index(picked.loc[picked["seg_text"] == SEEN, "query_key"])
+    fold_mask = ~(row_holdout | train["query_key"].isin(seen_keys).to_numpy())
+    val_seen = dict(zip(picked["query_key"], picked["seg_text"]))
+    return picked["query_key"].tolist(), val_seen, fold_mask, report
 
 
-def build_val_queries(train: pd.DataFrame, val_keys: list):
+def build_val_queries(train: pd.DataFrame, val_keys: list, val_seen: dict):
     """Таблица валидационных запросов (одна строка на ключ) и эталонные объявления."""
-    sub = train[train["query_key"].isin(pd.Index(val_keys))]
-    q = sub.drop_duplicates("query_key", keep="first").set_index("query_key").loc[val_keys].reset_index()
-    q.insert(0, "query_id", [f"val_{i:05d}" for i in range(len(q))])
-    truth_map = (sub.groupby("query_key", sort=True)["item_id"]
+    rows = train[train["query_key"].isin(pd.Index(val_keys))]
+    queries = (rows.drop_duplicates("query_key", keep="first")
+               .set_index("query_key").loc[val_keys].reset_index())
+    queries.insert(0, "query_id", [f"val_{i:05d}" for i in range(len(queries))])
+    queries["seg_text"] = queries["query_key"].map(val_seen)
+    truth_map = (rows.groupby("query_key", sort=True)["item_id"]
                  .agg(lambda s: sorted(dict.fromkeys(s))).to_dict())
-    truth = [truth_map[k] for k in val_keys]
-    return q, truth
+    return queries, [truth_map[k] for k in val_keys]
 
 
 def recall_at_k(predictions, truth, k: int = 50) -> float:
     """Recall@K ровно как в условии: среднее по запросам |топ-K ∩ rel| / |rel|."""
-    vals = []
-    for pred, rel in zip(predictions, truth):
-        if len(rel) == 0:
-            continue
-        top = frozenset(pred[:k])
-        vals.append(sum(r in top for r in rel) / len(rel))
-    return float(np.mean(vals)) if vals else 0.0
+    return float(np.mean(per_query_recall(predictions, truth, k)))
 
 
-def recall_by_segment(predictions, truth, segment, k: int = 50) -> pd.DataFrame:
-    """Recall@K в разрезе сегментов (например, знакомые/новые, доставка/нет)."""
-    rows = []
-    for pred, rel, seg in zip(predictions, truth, segment):
-        top = frozenset(pred[:k])
-        rows.append((seg, sum(r in top for r in rel) / len(rel)))
-    df = pd.DataFrame(rows, columns=["segment", "recall"])
-    return df.groupby("segment").agg(n=("recall", "size"), recall=("recall", "mean"))
+def per_query_recall(predictions, truth, k: int = 50) -> np.ndarray:
+    return np.array([sum(r in frozenset(p[:k]) for r in rel) / len(rel)
+                     for p, rel in zip(predictions, truth)])
