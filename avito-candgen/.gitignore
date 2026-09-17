@@ -1,0 +1,10 @@
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+outputs/
+data_synth/
+*.parquet
+answer.csv
+__pycache__/
+.ipynb_checkpoints/
