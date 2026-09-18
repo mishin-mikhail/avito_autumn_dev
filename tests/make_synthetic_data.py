@@ -3,6 +3,7 @@
 
     python tests/make_synthetic_data.py --out data_synth
     DATA_DIR=data_synth jupyter nbconvert --to notebook --execute notebooks/01_eda_baseline.ipynb
+    DATA_DIR=data_synth SMOKE_TEST=1 jupyter nbconvert --to notebook --execute notebooks/02_ranker.ipynb
 
 Воспроизводит ключевые особенности реальных данных: параметры объявлений в виде
 «Вид услуги … Место оказания услуг … Тип услуги …», фильтры в том же формате,
@@ -32,6 +33,18 @@ CITIES = {  # код локации: (город, широта, долгота)
     633540: ("Подольск", 55.43, 37.54),
 }
 REGIONS = {107620: [637640, 633540], 107621: [653240]}   # «региональные» id поиска
+MODIFIERS = ["", "", "", "недорого", "срочно", "на дому", "с выездом", "круглосуточно", "частник",
+             "цена", "отзывы", "рядом", "опытный", "под ключ", "быстро", "качественно", "Москва",
+             "Казань", "выходные", "вечером", "мастер", "профессионал", "дешево", "с гарантией"]
+
+
+def query_text(rng, phrase: str) -> str:
+    """Формулировка запроса: фраза + модификатор; изредка — опечатка (выпавшая буква)."""
+    text = f"{phrase} {rng.choice(MODIFIERS)}".strip()
+    if rng.random() < 0.1 and len(text) > 5:
+        i = int(rng.integers(1, len(text) - 1))
+        text = text[:i] + text[i + 1:]
+    return text
 
 
 def hexid(rng, n):
@@ -84,7 +97,7 @@ def main(out: Path, n_items=6000, n_train=30000, n_bench=300, seed=0):
             if "Рейтинг" in filt:
                 cand = cand[cand["item_rating"] >= 4] if (cand["item_rating"] >= 4).any() else cand
             it = cand.iloc[int(rng.integers(0, len(cand)))]
-            out.append({"search_query": str(rng.choice(phrases)), "search_location_id": search_loc,
+            out.append({"search_query": query_text(rng, str(rng.choice(phrases))), "search_location_id": search_loc,
                         "search_is_delivery_search": 0, "search_infm_params_text": str(filt),
                         "search_category": 114, **it.to_dict()})
         return pd.DataFrame(out)

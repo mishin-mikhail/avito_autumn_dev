@@ -66,3 +66,37 @@ def error_examples(predictions, truth, queries: pd.DataFrame, items: pd.DataFram
         if len(rows) >= n:
             break
     return pd.DataFrame(rows)
+
+
+V2_SOURCES = ["src_text", "src_text_loc", "src_prior_loc", "src_memo"]
+
+
+def v2_rows(pool: pd.DataFrame) -> pd.DataFrame:
+    """Строки пула, которые были бы и в пуле v2 (без списка по символьному сходству)."""
+    return pool[pool[V2_SOURCES].any(axis=1)]
+
+
+def difficulty_table(pools: dict, k: int = 50) -> pd.DataFrame:
+    """
+    Насколько «плотная» конкуренция у запросов разных наборов (медианы по запросам):
+      * объявлений корпуса в той же локации;
+      * объявлений «рядом» (близость > 0.5);
+      * максимальный BM25 заголовка (насколько много явных текстовых совпадений);
+      * скор формулы v2 у k-го кандидата (порог попадания в топ-k).
+    pools: имя → пул v3 с колонкой stage1.
+    """
+    rows = {}
+    for name, pool in pools.items():
+        per_q = pool.groupby("q").agg(same_loc=("q_n_same_loc", "first"), near=("q_n_near", "first"),
+                                      title_max=("q_title_max", "first"))
+        kth = (pool[pool["stage1_rank"] == k - 1].set_index("q")["stage1"]
+               .reindex(per_q.index))
+        rows[name] = {
+            "запросов": len(per_q),
+            "объявлений в той же локации": float(np.expm1(per_q["same_loc"]).median()),
+            "объявлений рядом": float(per_q["near"].median()),
+            "max BM25 заголовка": float(per_q["title_max"].median()),
+            f"скор v2 у {k}-го": float(kth.median()),
+            "доля «региональных»": float(pool.groupby("q")["q_region"].first().mean()),
+        }
+    return pd.DataFrame(rows).T.round(3)

@@ -1,9 +1,10 @@
 """
-Сквозной пайплайн одного «этапа» (валидация или бенчмарк):
-  корпус → статистики из train → запросы → пул кандидатов с признаками.
+Сквозной пайплайн: корпус → статистики из train → запросы → пул кандидатов с признаками.
 
-Валидация и бенчмарк проходят через одну и ту же функцию build_stage —
-отличаются только корпус, запросы и строки train, по которым считаются статистики.
+* build_stage   — всё сразу для одного набора запросов (ноутбук v2);
+* build_index   — только индекс корпуса (v3: один корпус на валидацию и все фолды ранкера);
+* build_pool    — статистики + пул для набора запросов поверх готового индекса.
+Результат build_stage = build_index + build_pool без расширения, то есть в точности v2.
 """
 from dataclasses import dataclass
 
@@ -13,10 +14,15 @@ import pandas as pd
 from .analysis import attach_labels
 from .candidates import Corpus, QuerySet, Vocabs, build_corpus, build_queries, feature_names, generate_pool
 from .geo import LocationModel
+from .params import place_text, service_text
 from .priors import ItemStats, MicrocatPrior
 from .utils import timer
 
-ITEM_TEXT_FIELDS = {"title": "item_title_raw", "params": "item_infm_params_text", "desc": "item_description_raw"}
+# колонки train, нужные для статистик (чтобы не копировать всю таблицу)
+STATS_COLS = ["lemma_key", "search_category", "search_location_id", "item_id", "item_microcat_id",
+              "item_location_id", "item_latitude", "item_longitude"]
+V2_LEMMA_FIELDS = ("title", "params", "desc")
+EXT_LEMMA_FIELDS = V2_LEMMA_FIELDS + ("service", "place")
 
 
 def add_lemma_keys(df: pd.DataFrame, lem) -> pd.DataFrame:
@@ -27,26 +33,37 @@ def add_lemma_keys(df: pd.DataFrame, lem) -> pd.DataFrame:
 
 
 class ItemLemmaCache:
-    """Лемматизированные поля объявлений по item_id: корпус валидации почти совпадает
-    с корпусом бенчмарка, и второй раз его лемматизировать не нужно."""
+    """Лемматизированные поля объявлений по item_id. Корпуса валидации и бенчмарка почти
+    совпадают, поэтому каждое объявление лемматизируется один раз."""
 
     def __init__(self, lem, desc_max_chars: int):
         self.lem, self.desc_max_chars = lem, desc_max_chars
-        self._store: dict = {}
+        self._store: dict = {}          # поле → {item_id: строка лемм}
 
-    def get(self, items: pd.DataFrame) -> dict:
+    def _raw(self, field: str, items: pd.DataFrame) -> list:
+        if field == "title":
+            return items["item_title_raw"].tolist()
+        if field == "params":
+            return items["item_infm_params_text"].tolist()
+        if field == "desc":
+            return [d[: self.desc_max_chars] for d in items["item_description_raw"]]
+        if field == "service":
+            return [service_text(p) for p in items["item_infm_params_text"]]
+        if field == "place":
+            return [place_text(p) for p in items["item_infm_params_text"]]
+        raise KeyError(field)
+
+    def get(self, items: pd.DataFrame, fields=V2_LEMMA_FIELDS) -> dict:
         ids = items["item_id"].tolist()
-        todo = [i for i, item_id in enumerate(ids) if item_id not in self._store]
-        if todo:
-            sub = items.iloc[todo]
-            desc = [d[: self.desc_max_chars] for d in sub["item_description_raw"]]
-            lemmas = zip(self.lem.join_many(sub["item_title_raw"]),
-                         self.lem.join_many(sub["item_infm_params_text"]),
-                         self.lem.join_many(desc))
-            for item_id, triple in zip(sub["item_id"], lemmas):
-                self._store[item_id] = triple
-        rows = [self._store[i] for i in ids]
-        return {name: [r[j] for r in rows] for j, name in enumerate(ITEM_TEXT_FIELDS)}
+        out = {}
+        for field in fields:
+            store = self._store.setdefault(field, {})
+            todo = [i for i, item_id in enumerate(ids) if item_id not in store]
+            if todo:
+                sub = items.iloc[todo]
+                store.update(zip(sub["item_id"], self.lem.join_many(self._raw(field, sub))))
+            out[field] = [store[i] for i in ids]
+        return out
 
 
 @dataclass
@@ -60,19 +77,22 @@ class Stage:
     features: list
 
 
-def build_stage(name: str, items: pd.DataFrame, queries: pd.DataFrame, stats_rows: pd.DataFrame, *,
-                lem, cache: ItemLemmaCache, vocabs: Vocabs, cfg, use_item_stats: bool,
-                truth: list = None) -> Stage:
-    """
-    items       — корпус, среди которого ищем;
-    queries     — запросы этапа;
-    stats_rows  — строки train, по которым считаются статистики (для валидации — только train-фолд!);
-    truth       — эталон (для валидации): добавляет в пул колонку label.
-    """
+def build_index(name: str, items: pd.DataFrame, *, cache: ItemLemmaCache, vocabs: Vocabs, cfg,
+                ext_cfg=None) -> Corpus:
+    fields = V2_LEMMA_FIELDS if ext_cfg is None else EXT_LEMMA_FIELDS
     with timer(f"{name}: индекс корпуса"):
-        corpus = build_corpus(items, cache.get(items), cfg, vocabs)
+        return build_corpus(items, cache.get(items, fields), cfg, vocabs, ext_cfg)
 
-    with timer(f"{name}: статистики train"):
+
+def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataFrame,
+               stats_rows: pd.DataFrame, *, lem, vocabs: Vocabs, cfg, use_item_stats: bool,
+               truth: list = None, ext_cfg=None, verbose: bool = True):
+    """
+    stats_rows — строки train, по которым считаются статистики (без строк самих запросов!);
+    truth      — эталон: добавляет в пул колонку label.
+    Возвращает (QuerySet, пул).
+    """
+    with timer(f"{name}: статистики и пул"):
         prior = MicrocatPrior(cfg.prior_alpha, cfg.prior_beta).fit(
             stats_rows["lemma_key"], stats_rows["search_category"],
             vocabs.micro.encode(stats_rows["item_microcat_id"].tolist()), vocabs.micro.size_with_unknown)
@@ -85,12 +105,19 @@ def build_stage(name: str, items: pd.DataFrame, queries: pd.DataFrame, stats_row
             item_stats = ItemStats().fit(stats_rows["lemma_key"], item_idx, corpus.n)
             corpus.log_pop = np.log1p(item_stats.pop).astype(np.float32)
 
-    with timer(f"{name}: пул кандидатов"):
-        query_set = build_queries(queries, lem, vocabs, prior)
-        pool = generate_pool(corpus, query_set, geo, cfg, item_stats)
+        query_set = build_queries(queries, lem, vocabs, prior, ext=ext_cfg is not None)
+        pool = generate_pool(corpus, query_set, geo, cfg, item_stats, verbose=verbose, ext_cfg=ext_cfg)
         if truth is not None:
             pool = attach_labels(pool, corpus, truth)
+    print(f"{name}: запросов {query_set.n:,}, строк пула {len(pool):,} (~{len(pool) / query_set.n:.0f} на запрос)")
+    return query_set, pool
 
-    print(f"{name}: запросов {query_set.n:,}, объявлений {corpus.n:,}, строк пула {len(pool):,} "
-          f"(~{len(pool) / query_set.n:.0f} на запрос)")
+
+def build_stage(name: str, items: pd.DataFrame, queries: pd.DataFrame, stats_rows: pd.DataFrame, *,
+                lem, cache: ItemLemmaCache, vocabs: Vocabs, cfg, use_item_stats: bool,
+                truth: list = None) -> Stage:
+    """Пайплайн v2 целиком: индекс корпуса + пул для одного набора запросов."""
+    corpus = build_index(name, items, cache=cache, vocabs=vocabs, cfg=cfg)
+    query_set, pool = build_pool(name, corpus, items, queries, stats_rows, lem=lem, vocabs=vocabs, cfg=cfg,
+                                 use_item_stats=use_item_stats, truth=truth)
     return Stage(name, items, queries, corpus, query_set, pool, feature_names(use_item_stats))

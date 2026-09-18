@@ -69,7 +69,7 @@ def library_versions() -> dict:
     import importlib
     import platform
     out = {"python": platform.python_version()}
-    for name in ("numpy", "pandas", "scipy", "sklearn", "pyarrow", "pymorphy3", "torch"):
+    for name in ("numpy", "pandas", "scipy", "sklearn", "pyarrow", "pymorphy3", "lightgbm", "torch"):
         try:
             out[name] = importlib.import_module(name).__version__
         except Exception:  # noqa: BLE001 — модуль может отсутствовать

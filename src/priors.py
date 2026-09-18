@@ -62,6 +62,11 @@ class MicrocatPrior:
         self.C_tok = (R.T @ Mh).tocsr()
         return self
 
+    def text_counts(self, lemma_key: list) -> np.ndarray:
+        """Сколько строк статистик приходится на каждый «мешок лемм» (0 — текст новый)."""
+        totals = np.asarray(self.C_text.sum(axis=1)).ravel()
+        return np.array([totals[self.text_index[k]] if k in self.text_index else 0.0 for k in lemma_key])
+
     def transform(self, lemma_key: list, category: list) -> np.ndarray:
         """Плотная матрица P(m | запрос), запросы × микрокатегории (float32)."""
         a, b = self.alpha, self.beta

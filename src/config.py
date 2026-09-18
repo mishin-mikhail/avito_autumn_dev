@@ -62,3 +62,53 @@ class Config:
 
 
 CFG = Config()
+
+
+@dataclass(frozen=True)
+class RankerConfig:
+    """Параметры v3: трудная валидация, расширенные признаки, LightGBM-ранкер.
+    Общие параметры пайплайна (BM25, пул, локации) берутся из Config."""
+    version: str = "v3"
+
+    # --- опорные значения отправки v2 (тег v2) ---
+    v2_lb: float = 0.8313
+    v2_answer_md5: str = "2de61da58afd87fc244e225b7cccde58"
+    v2_weights: tuple = (("title", 2.0), ("params", 0.1), ("desc", 2.0), ("cov", 1.0), ("filt", 2.0),
+                         ("filt_exact", 0.25), ("logp", 0.1), ("loc_same", 2.0), ("loc_p", 2.0),
+                         ("loc_logp", 0.25))
+
+    # --- выборка запросов ---
+    # "auto": из двух схем валидации берётся та, где веса v2 ближе к результату на лидерборде
+    val_scheme: str = "auto"          # "auto" | "injected" | "in_corpus"
+    val_salt: str = "val-v3"
+    n_val_queries: int = 2500
+    text_holdout_frac: float = 0.2    # у «новых» запросов берётся один запрос на текст
+    n_folds: int = 4                  # фолды для ранкера: n_folds-1 на обучение, последний — ранняя остановка
+    fold_queries: int = 4000
+    fold_holdout_frac: float = 0.3    # у фолдов выше: «новых» текстов среди запросов «в корпусе» немного
+
+    # --- расширенный пул ---
+    pool_k_char: int = 300
+    char_ngram: tuple = (3, 5)
+    char_min_df: int = 3
+
+    # --- обучающая выборка ранкера (на запрос) ---
+    sample_hard: int = 150            # лучшие по формуле v2
+    sample_char: int = 50             # лучшие по символьному сходству среди остальных
+    sample_random: int = 100          # случайные из оставшихся
+
+    # --- LightGBM ---
+    objectives: tuple = ("lambdarank", "binary")
+    learning_rate: float = 0.05
+    num_leaves: int = 63
+    min_data_in_leaf: int = 50
+    feature_fraction: float = 0.8
+    lambda_l2: float = 1.0
+    max_rounds: int = 1500
+    early_stopping: int = 100
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+RANKER_CFG = RankerConfig()

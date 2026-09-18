@@ -109,11 +109,12 @@ def half_split_cv(data: PoolData, w0, grid, passes, k, decimals) -> dict:
     return out
 
 
-def predict_from_pool(pool: pd.DataFrame, corpus, features, w, k, decimals, n_queries) -> list:
-    """Топ-k item_id для каждого запроса. Если в пуле меньше k — добор популярными объявлениями."""
+def predict_from_scores(pool: pd.DataFrame, corpus, score: np.ndarray, k: int, decimals: int,
+                        n_queries: int) -> list:
+    """Топ-k item_id для каждого запроса по готовому скору строк пула.
+    Если в пуле меньше k кандидатов — добор популярными объявлениями."""
     q = pool["q"].to_numpy(np.int64)
     items = pool["item"].to_numpy(np.int64)
-    score = linear_score(pool[features].to_numpy(np.float64), np.asarray(w, np.float64))
     order, sel = topk_mask(q, corpus.rank[items], score, k, decimals)
     q_top, i_top = q[order][sel], items[order][sel]
     bounds = np.searchsorted(q_top, np.arange(n_queries + 1))
@@ -127,3 +128,9 @@ def predict_from_pool(pool: pd.DataFrame, corpus, features, w, k, decimals, n_qu
             top += [int(i) for i in fallback[: k + len(top)] if i not in seen][: k - len(top)]
         predictions.append([corpus.item_ids[i] for i in top])
     return predictions
+
+
+def predict_from_pool(pool: pd.DataFrame, corpus, features, w, k, decimals, n_queries) -> list:
+    """Топ-k item_id по линейной формуле."""
+    score = linear_score(pool[features].to_numpy(np.float64), np.asarray(w, np.float64))
+    return predict_from_scores(pool, corpus, score, k, decimals, n_queries)
