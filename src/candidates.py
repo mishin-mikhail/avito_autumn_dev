@@ -14,6 +14,10 @@
   * src_char_loc   топ по символьному сходству с приоритетом близких объявлений,
 и дополнительные признаки для ранкера (EXT_FEATURES). Без расширения пул и признаки
 в точности совпадают с v2.
+
+Расширение v4 (если в корпус переданы вектора объявлений): список
+  * src_dense_loc  топ по близости эмбеддингов с приоритетом близких объявлений,
+и признаки dense, rank_dense_loc (DENSE_FEATURES).
 """
 from dataclasses import dataclass
 
@@ -22,6 +26,7 @@ import pandas as pd
 
 from .bm25 import BM25Field, CoverageField, row_max_normalize
 from .charsim import CharIndex
+from .encoder import exact_dot
 from .filters import normalize_params, parse_filter_pairs, pool_match_share
 from .params import service_text
 
@@ -34,6 +39,7 @@ BASE_FEATURES = [
 ]
 ITEM_STAT_FEATURES = ["log_pop", "log_memo"]
 SOURCES = ["src_text", "src_text_loc", "src_prior_loc", "src_memo"]
+ALL_SOURCES = SOURCES + ["src_char_loc", "src_dense_loc"]      # src_char_loc — v3, src_dense_loc — v4
 V2_FIELDS = ("title", "params", "desc")
 
 # признаки расширения v3: пара «запрос — объявление», запрос, объявление
@@ -43,6 +49,7 @@ EXT_QUERY_FEATURES = ["q_len", "q_n_pairs", "q_region", "q_text_cnt", "q_prior_m
                       "q_title_max", "q_n_same_loc", "q_n_near", "q_pool_size"]
 EXT_ITEM_FEATURES = ["i_log_price", "i_title_len", "i_desc_len", "i_phone_hidden", "i_msg_forbidden"]
 EXT_FEATURES = EXT_PAIR_FEATURES + EXT_QUERY_FEATURES + EXT_ITEM_FEATURES
+DENSE_FEATURES = ["dense", "rank_dense_loc"]      # v4, только если есть вектора
 
 
 def feature_names(use_item_stats: bool) -> list:
@@ -97,9 +104,11 @@ class ExtIndex:
     phone_hidden: np.ndarray
     msg_forbidden: np.ndarray
     loc_count: np.ndarray       # число объявлений корпуса в каждой локации (по кодам)
+    emb: np.ndarray = None      # вектора объявлений (v4), квантованные (encoder.quantize)
 
 
-def _build_ext(items: pd.DataFrame, lemmas: dict, cfg, ext_cfg, n_loc_codes: int, loc: np.ndarray) -> ExtIndex:
+def _build_ext(items: pd.DataFrame, lemmas: dict, cfg, ext_cfg, n_loc_codes: int, loc: np.ndarray,
+               item_emb: np.ndarray = None) -> ExtIndex:
     def col(name):
         return np.nan_to_num(items[name].to_numpy(np.float32), nan=0.0)
 
@@ -114,6 +123,7 @@ def _build_ext(items: pd.DataFrame, lemmas: dict, cfg, ext_cfg, n_loc_codes: int
         phone_hidden=col("item_is_phone_hidden"),
         msg_forbidden=col("item_is_message_forbidden"),
         loc_count=np.bincount(loc, minlength=n_loc_codes).astype(np.float32),
+        emb=item_emb,
     )
 
 
@@ -139,7 +149,8 @@ class Corpus:
         return len(self.item_ids)
 
 
-def build_corpus(items: pd.DataFrame, lemmas: dict, cfg, vocabs: Vocabs, ext_cfg=None) -> Corpus:
+def build_corpus(items: pd.DataFrame, lemmas: dict, cfg, vocabs: Vocabs, ext_cfg=None,
+                 item_emb: np.ndarray = None) -> Corpus:
     """lemmas — лемматизированные поля в порядке строк items: title, params, desc
     (+ service, place, если ext_cfg задан — тогда строится расширение v3)."""
     ids = items["item_id"].to_numpy(dtype=object)
@@ -152,7 +163,8 @@ def build_corpus(items: pd.DataFrame, lemmas: dict, cfg, vocabs: Vocabs, ext_cfg
     rating_raw = items["item_rating"].to_numpy(np.float32)
     reviews = np.nan_to_num(items["item_rating_reviews_count"].to_numpy(np.float32), nan=0.0)
     loc = vocabs.loc.encode(items["item_location_id"].tolist())
-    ext = None if ext_cfg is None else _build_ext(items, lemmas, cfg, ext_cfg, vocabs.loc.size_with_unknown, loc)
+    ext = (None if ext_cfg is None else
+           _build_ext(items, lemmas, cfg, ext_cfg, vocabs.loc.size_with_unknown, loc, item_emb))
     return Corpus(
         item_ids=ids, rank=rank,
         loc=loc,
@@ -180,16 +192,19 @@ class QuerySet:
     prior: np.ndarray     # запросы × микрокатегории
     raw_text: list = None           # исходные тексты (для символьного сходства, v3)
     text_count: np.ndarray = None   # сколько раз «мешок лемм» встречался в статистиках (v3)
+    emb: np.ndarray = None          # вектора запросов (v4), квантованные (encoder.quantize)
 
     @property
     def n(self) -> int:
         return len(self.lemmas)
 
 
-def build_queries(q: pd.DataFrame, lem, vocabs: Vocabs, prior_model, ext: bool = False) -> QuerySet:
+def build_queries(q: pd.DataFrame, lem, vocabs: Vocabs, prior_model, ext: bool = False,
+                  query_emb: np.ndarray = None) -> QuerySet:
     lemma_key = lem.key_many(q["search_query"])
     return QuerySet(
         raw_text=q["search_query"].tolist() if ext else None,
+        emb=query_emb,
         text_count=prior_model.text_counts(lemma_key) if ext else None,
         lemmas=lem.join_many(q["search_query"]),
         lemma_key=lemma_key,
@@ -269,6 +284,7 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
     """Строки пула: q (номер запроса), item (индекс в корпусе), признаки и флаги источников.
     Расширение v3 включается, если корпус построен с ext_cfg и ext_cfg передан сюда."""
     ext = ext_cfg is not None and corpus.ext is not None
+    dense = ext and corpus.ext.emb is not None and qs.emb is not None
     tie = (corpus.n - 1 - corpus.rank).astype(np.int64)   # меньший item_id → больший тай-брейк
     dec, f = cfg.score_decimals, corpus.fields
     Q = {name: f[name].query_matrix(qs.lemmas) for name in V2_FIELDS}
@@ -280,6 +296,8 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
     if ext:
         E = corpus.ext
         list_names.append("src_char_loc")
+        if dense:
+            list_names.append("src_dense_loc")
         QE = {"service": E.service.query_matrix(qs.lemmas), "place": E.place.query_matrix(qs.lemmas),
               "char": E.char.query_matrix(qs.raw_text)}
         context = _query_context(corpus, qs)
@@ -318,6 +336,10 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
             char = E.char.score(QE["char"][sl])
             n_near = (proximity > 0.5).sum(axis=1).astype(np.float32)
             lists["src_char_loc"] = topk_rows(char + 3.0 * proximity, ext_cfg.pool_k_char, tie, dec)
+            if dense:
+                # точная (не зависящая от BLAS) близость; float32 — как у остальных плотных скоров
+                dense_sim = exact_dot(qs.emb[sl], E.emb).astype(np.float32)
+                lists["src_dense_loc"] = topk_rows(dense_sim + 3.0 * proximity, ext_cfg.pool_k_dense, tie, dec)
             micro_rank = np.empty(qs.prior[sl].shape, dtype=np.int32)
             np.put_along_axis(micro_rank, np.argsort(-qs.prior[sl], axis=1, kind="stable"),
                               np.arange(qs.prior.shape[1], dtype=np.int32)[None, :], axis=1)
@@ -371,12 +393,17 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 text0=text0[rr, cc],
                 prior_rank=micro_rank[rr, corpus.micro[cc]].astype(np.float32),
                 dist_km=dist[rr, cc],
-                **{"rank_" + k[4:]: np.concatenate(ranks[k]).astype(np.float32) for k in list_names},
+                **{"rank_" + k[4:]: np.concatenate(ranks[k]).astype(np.float32)
+                   for k in list_names if k != "src_dense_loc"},
                 **{name: values[qi] for name, values in context.items()},
                 q_title_max=title_max[rr], q_n_near=n_near[rr],
                 i_log_price=E.log_price[cc], i_title_len=E.title_len[cc], i_desc_len=E.desc_len[cc],
                 i_phone_hidden=E.phone_hidden[cc], i_msg_forbidden=E.msg_forbidden[cc],
             )
+            if dense:
+                part["dense"] = dense_sim[rr, cc]
+                part["rank_dense_loc"] = np.concatenate(ranks["src_dense_loc"]).astype(np.float32)
+                del dense_sim
             del service, cov_place, char, micro_rank, n_near
         parts.append(part)
         # освобождаем плотные массивы до следующего батча, иначе пик памяти удваивается

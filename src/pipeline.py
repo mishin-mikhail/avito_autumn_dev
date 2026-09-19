@@ -78,15 +78,15 @@ class Stage:
 
 
 def build_index(name: str, items: pd.DataFrame, *, cache: ItemLemmaCache, vocabs: Vocabs, cfg,
-                ext_cfg=None) -> Corpus:
+                ext_cfg=None, item_emb=None) -> Corpus:
     fields = V2_LEMMA_FIELDS if ext_cfg is None else EXT_LEMMA_FIELDS
     with timer(f"{name}: индекс корпуса"):
-        return build_corpus(items, cache.get(items, fields), cfg, vocabs, ext_cfg)
+        return build_corpus(items, cache.get(items, fields), cfg, vocabs, ext_cfg, item_emb)
 
 
 def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataFrame,
                stats_rows: pd.DataFrame, *, lem, vocabs: Vocabs, cfg, use_item_stats: bool,
-               truth: list = None, ext_cfg=None, verbose: bool = True):
+               truth: list = None, ext_cfg=None, query_emb=None, verbose: bool = True):
     """
     stats_rows — строки train, по которым считаются статистики (без строк самих запросов!);
     truth      — эталон: добавляет в пул колонку label.
@@ -105,7 +105,7 @@ def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataF
             item_stats = ItemStats().fit(stats_rows["lemma_key"], item_idx, corpus.n)
             corpus.log_pop = np.log1p(item_stats.pop).astype(np.float32)
 
-        query_set = build_queries(queries, lem, vocabs, prior, ext=ext_cfg is not None)
+        query_set = build_queries(queries, lem, vocabs, prior, ext=ext_cfg is not None, query_emb=query_emb)
         pool = generate_pool(corpus, query_set, geo, cfg, item_stats, verbose=verbose, ext_cfg=ext_cfg)
         if truth is not None:
             pool = attach_labels(pool, corpus, truth)

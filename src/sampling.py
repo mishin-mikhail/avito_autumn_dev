@@ -92,3 +92,51 @@ def sample_queries(name: str, train: pd.DataFrame, groups: pd.DataFrame, target:
 def bench_targets(bench_q: pd.DataFrame, n: int) -> pd.Series:
     """Число запросов в каждой ячейке (знакомый/новый × страта) в пропорциях бенчмарка."""
     return _allocate(bench_q.groupby(["seg_text", "stratum"]).size(), n)
+
+
+# ─────────────────── выборки v4: одни и те же в ноутбуках 03 и 04 ───────────────────
+
+def scheme_keys(groups: pd.DataFrame) -> dict:
+    """Из каких групп-запросов можно брать запросы в каждой схеме валидации:
+    injected — любые; in_corpus — только те, чьи выбранные объявления лежат в корпусе бенчмарка."""
+    return {"injected": pd.Index(groups["query_key"]),
+            "in_corpus": pd.Index(groups.loc[groups["in_corpus"], "query_key"])}
+
+
+def build_validation(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.DataFrame, rcfg) -> dict:
+    """Валидация обеих схем. Одна соль — одни и те же убранные из train тексты."""
+    target = bench_targets(bench_q, rcfg.n_val_queries)
+    all_rows = np.ones(len(train), dtype=bool)
+    return {name: sample_queries(f"валидация {name}", train, groups, target, all_rows, keys,
+                                 rcfg.text_holdout_frac, rcfg.val_salt)
+            for name, keys in scheme_keys(groups).items()}
+
+
+def build_folds(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.DataFrame, rcfg,
+                val: QuerySample, keys: pd.Index) -> list:
+    """Фолды ранкера для выбранной схемы: не пересекаются с валидацией и друг с другом."""
+    eligible = keys.difference(pd.Index(val.keys))
+    target = bench_targets(bench_q, rcfg.fold_queries)
+    folds = []
+    for f in range(rcfg.n_folds):
+        fold = sample_queries(f"фолд {f}", train, groups, target, val.stats_mask, eligible,
+                              rcfg.fold_holdout_frac, f"{rcfg.val_salt}-fold{f}")
+        eligible = eligible.difference(pd.Index(fold.keys))
+        folds.append(fold)
+    return folds
+
+
+def picked_rows_mask(train: pd.DataFrame, samples) -> np.ndarray:
+    """
+    Строки train, относящиеся к самим выбранным запросам: у «новых» — все строки их текста,
+    у «знакомых» — строки их группы. Эти строки нельзя давать энкодеру при дообучении,
+    иначе на валидации и фолдах он «узнает» свои обучающие пары и метрика будет завышена.
+    (Отложенные тексты, которые ни в одну выборку не попали, энкодеру не мешают.)
+    """
+    unseen_texts, seen_keys = [], []
+    for s in samples:
+        q = s.queries
+        unseen_texts += q.loc[q["seg_text"] == UNSEEN, "norm_text"].tolist()
+        seen_keys += q.loc[q["seg_text"] == SEEN, "query_key"].tolist()
+    return (train["norm_text"].isin(pd.Index(unseen_texts)).to_numpy()
+            | train["query_key"].isin(pd.Index(seen_keys)).to_numpy())

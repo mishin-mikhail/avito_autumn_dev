@@ -1,0 +1,7 @@
+# Дополнительно для 03_embeddings.ipynb (дообучение энкодера, нужен GPU).
+#
+# PyTorch здесь намеренно НЕ указан: его сборка зависит от версии CUDA на машине.
+# В GPU-среде он обычно уже установлен; если нет — команда под вашу CUDA:
+# https://pytorch.org/get-started/locally/
+# Проверено: torch 2.8, transformers 4.57.6 и 5.17.
+transformers==4.57.6

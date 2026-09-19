@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from .candidates import SOURCES
+from .candidates import ALL_SOURCES
 
 
 def attach_labels(pool: pd.DataFrame, corpus, truth: list) -> pd.DataFrame:
@@ -26,7 +26,7 @@ def source_recall(pool: pd.DataFrame, n_rel: np.ndarray) -> pd.DataFrame:
     """Какую долю эталона ловит каждый список (при своём K) и весь пул."""
     pos = pool[pool["label"] == 1]
     out = {}
-    for name in SOURCES + ["pool"]:
+    for name in [s for s in ALL_SOURCES if s in pool.columns] + ["pool"]:
         hits = pos if name == "pool" else pos[pos[name]]
         out[name] = float((np.bincount(hits["q"], minlength=len(n_rel)) / n_rel).mean())
     return pd.DataFrame({"recall": out}).assign(
@@ -68,7 +68,7 @@ def error_examples(predictions, truth, queries: pd.DataFrame, items: pd.DataFram
     return pd.DataFrame(rows)
 
 
-V2_SOURCES = ["src_text", "src_text_loc", "src_prior_loc", "src_memo"]
+V2_SOURCES = ["src_text", "src_text_loc", "src_prior_loc", "src_memo"]   # пул как в v2
 
 
 def v2_rows(pool: pd.DataFrame) -> pd.DataFrame:

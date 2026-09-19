@@ -89,6 +89,7 @@ class RankerConfig:
 
     # --- расширенный пул ---
     pool_k_char: int = 300
+    pool_k_dense: int = 300           # список по эмбеддингам (v4; без эмбеддингов не используется)
     char_ngram: tuple = (3, 5)
     char_min_df: int = 3
 
@@ -112,3 +113,42 @@ class RankerConfig:
 
 
 RANKER_CFG = RankerConfig()
+
+
+@dataclass(frozen=True)
+class EmbeddingConfig:
+    """Параметры двухбашенного энкодера (v4): дообучение и кодирование корпуса."""
+    # кандидаты: multilingual-e5-base (базовый) и deepvk/USER-base (тот же e5, дообучен на русском).
+    # Оба требуют префиксов "query: " и "passage: ".
+    candidates: tuple = ("intfloat/multilingual-e5-base", "deepvk/USER-base")
+
+    max_len_query: int = 48
+    max_len_item: int = 160
+    desc_chars: int = 300          # сколько символов описания попадает в текст объявления
+
+    # дообучение: InfoNCE с негативами из батча + трудными негативами из корпуса
+    train_pairs: int = 400_000     # сколько пар train взять (0 — все)
+    batch_size: int = 0            # 0 — подобрать под память GPU (больше батч — больше негативов)
+    max_batch_size: int = 512      # верхняя граница автоподбора
+    hard_negatives: int = 2        # трудных негативов на запрос
+    hard_neg_skip: int = 5         # первые ранги не берём: там часто объявления, которые тоже подходят
+    hard_neg_depth: int = 50       # негатив выбирается случайно из рангов [skip, depth)
+    epochs: int = 1
+    lr: float = 2e-5
+    warmup_frac: float = 0.05
+    temperature: float = 0.02
+    max_grad_norm: float = 1.0
+    encode_batch: int = 512
+    # "auto": bf16 на GPU, который его умеет (A100 и новее), иначе fp16; ещё "bf16" | "fp16" | "off"
+    amp_dtype: str = "auto"
+    # градиентные чекпоинты: память ценой ~30% скорости — зато помещается батч в 2–3 раза больше
+    grad_checkpointing: bool = True
+
+    # оценка качества поиска по векторам (Recall@100) до и после дообучения
+    zero_shot_queries: int = 2000
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+EMB_CFG = EmbeddingConfig()

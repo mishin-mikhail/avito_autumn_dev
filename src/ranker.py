@@ -16,11 +16,16 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .candidates import BASE_FEATURES, EXT_FEATURES
+from .candidates import BASE_FEATURES, DENSE_FEATURES, EXT_FEATURES
 from .ranking import linear_score, rank_order, pool_recall, weights_vector
 
 STAGE1_FEATURES = ["stage1", "stage1_rank"]
 RANKER_FEATURES = BASE_FEATURES + EXT_FEATURES + STAGE1_FEATURES
+
+
+def ranker_features(use_dense: bool = False) -> list:
+    """Признаки ранкера; с эмбеддингами (v4) добавляются dense и rank_dense_loc."""
+    return RANKER_FEATURES + (DENSE_FEATURES if use_dense else [])
 
 
 def positions_in_query(q: np.ndarray, rank: np.ndarray, score: np.ndarray, decimals: int) -> np.ndarray:
@@ -85,19 +90,21 @@ def _group_sizes(gid: np.ndarray) -> np.ndarray:
 
 
 def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel: np.ndarray, valid_rank: np.ndarray,
-                 objective: str, rcfg, seed: int, n_threads: int, k: int, decimals: int, log_every: int = 100):
+                 objective: str, rcfg, seed: int, n_threads: int, k: int, decimals: int, log_every: int = 100,
+                 features: list = None):
     """
     train_rows — выборка строк с колонками gid (номер запроса, строки сгруппированы), label и признаками;
     valid_pool — полный пул фолда для ранней остановки (с label), valid_rank — ранги item_id его строк.
     Возвращает (модель, лучшая итерация, лучший Recall@k на фолде).
     """
+    features = features or RANKER_FEATURES
     has_pos = train_rows.groupby("gid")["label"].transform("max").to_numpy() > 0
     rows = train_rows[has_pos]                     # запросы без позитивов ничему не учат
-    dtrain = lgb.Dataset(rows[RANKER_FEATURES].to_numpy(np.float32), label=rows["label"].to_numpy(),
-                         group=_group_sizes(rows["gid"].to_numpy()), feature_name=RANKER_FEATURES,
+    dtrain = lgb.Dataset(rows[features].to_numpy(np.float32), label=rows["label"].to_numpy(),
+                         group=_group_sizes(rows["gid"].to_numpy()), feature_name=features,
                          free_raw_data=True)
     vq = valid_pool["q"].to_numpy(np.int64)
-    dvalid = lgb.Dataset(valid_pool[RANKER_FEATURES].to_numpy(np.float32), label=valid_pool["label"].to_numpy(),
+    dvalid = lgb.Dataset(valid_pool[features].to_numpy(np.float32), label=valid_pool["label"].to_numpy(),
                          group=_group_sizes(vq), reference=dtrain, free_raw_data=True)
     v_label = valid_pool["label"].to_numpy(np.float64)
 
@@ -114,8 +121,8 @@ def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel
     return booster, booster.best_iteration, booster.best_score["fold"][f"recall@{k}"]
 
 
-def ranker_score(booster, pool: pd.DataFrame, n_threads: int) -> np.ndarray:
-    return booster.predict(pool[RANKER_FEATURES].to_numpy(np.float32),
+def ranker_score(booster, pool: pd.DataFrame, n_threads: int, features: list = None) -> np.ndarray:
+    return booster.predict(pool[features or RANKER_FEATURES].to_numpy(np.float32),
                            num_iteration=booster.best_iteration, num_threads=n_threads).astype(np.float64)
 
 
