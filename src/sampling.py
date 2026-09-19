@@ -44,11 +44,17 @@ def group_table(train: pd.DataFrame, corpus_ids) -> pd.DataFrame:
 
 
 def sample_queries(name: str, train: pd.DataFrame, groups: pd.DataFrame, target: pd.Series,
-                   base_mask: np.ndarray, eligible: pd.Index, holdout_frac: float, salt: str) -> QuerySample:
+                   base_mask: np.ndarray, eligible: pd.Index, holdout_frac: float, salt: str,
+                   uniform_unseen: bool = False) -> QuerySample:
     """
     target    — число запросов в каждой ячейке (seg_text, stratum);
     base_mask — строки train, доступные этой выборке;
-    eligible  — ключи групп, из которых можно выбирать запросы.
+    eligible  — ключи групп, из которых можно выбирать запросы;
+    uniform_unseen — как выбирать «новые» запросы (v4: True, v3: False):
+        False — в порядке хеша группы: у текста со многими группами больше шансов попасть
+                в выборку, поэтому «новыми» оказываются в основном популярные тексты;
+        True  — в порядке хеша текста: все отложенные тексты равновероятны, и «новые» запросы,
+                как в бенчмарке, — в основном редкие тексты из длинного хвоста.
     """
     base = train.loc[base_mask, ["query_key", "norm_text"]]
     base_texts = pd.unique(base["norm_text"].to_numpy(dtype=object))
@@ -62,6 +68,10 @@ def sample_queries(name: str, train: pd.DataFrame, groups: pd.DataFrame, target:
 
     # новые: по одному запросу на убранный текст
     unseen_pool = g[g_holdout & g_eligible].drop_duplicates("norm_text", keep="first")
+    if uniform_unseen:
+        text_hash = [md5_hex(f"{salt}|u|{t}") for t in unseen_pool["norm_text"]]
+        unseen_pool = (unseen_pool.assign(text_hash=text_hash)
+                       .sort_values(["text_hash", "query_key"], kind="stable").drop(columns="text_hash"))
     # знакомые: у текста остаётся хотя бы одна группа среди доступных строк
     rest = g[~g_holdout]
     n_groups = rest["norm_text"].map(rest["norm_text"].value_counts())
@@ -108,7 +118,7 @@ def build_validation(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.Data
     target = bench_targets(bench_q, rcfg.n_val_queries)
     all_rows = np.ones(len(train), dtype=bool)
     return {name: sample_queries(f"валидация {name}", train, groups, target, all_rows, keys,
-                                 rcfg.text_holdout_frac, rcfg.val_salt)
+                                 rcfg.text_holdout_frac, rcfg.val_salt, rcfg.uniform_unseen_texts)
             for name, keys in scheme_keys(groups).items()}
 
 
@@ -120,7 +130,7 @@ def build_folds(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.DataFrame
     folds = []
     for f in range(rcfg.n_folds):
         fold = sample_queries(f"фолд {f}", train, groups, target, val.stats_mask, eligible,
-                              rcfg.fold_holdout_frac, f"{rcfg.val_salt}-fold{f}")
+                              rcfg.fold_holdout_frac, f"{rcfg.val_salt}-fold{f}", rcfg.uniform_unseen_texts)
         eligible = eligible.difference(pd.Index(fold.keys))
         folds.append(fold)
     return folds

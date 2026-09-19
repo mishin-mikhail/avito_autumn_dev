@@ -229,55 +229,111 @@ def _loss(encoder: BiEncoder, queries: list, docs: list, cfg, pad_to_max: bool =
     return torch.nn.functional.cross_entropy(logits, torch.arange(len(queries), device=encoder.device))
 
 
-def probe_batch_size(encoder: BiEncoder, cfg, candidates=(512, 384, 320, 256, 192, 160, 128, 96, 64, 48, 32, 16),
-                     headroom: float = 0.9) -> int:
+def is_gpu_oom(error: BaseException) -> bool:
     """
-    Наибольший батч из candidates, для которого шаг обучения помещается в память GPU
-    с запасом (headroom). Проверка — на худшем случае: все тексты дополнены до максимальной
-    длины, а память под состояние оптимизатора (2 копии весов в fp32) заранее занята.
+    Нехватка памяти GPU. На срезах MIG (например, A100 20 ГБ) PyTorch при переполнении
+    памяти не может запросить NVML и падает не с OutOfMemoryError, а с RuntimeError
+    «NVML_SUCCESS == r INTERNAL ASSERT FAILED» — по смыслу это та же нехватка памяти.
     """
     import torch
+    if isinstance(error, torch.cuda.OutOfMemoryError):
+        return True
+    text = str(error)
+    return isinstance(error, RuntimeError) and any(
+        marker in text for marker in ("out of memory", "NVML_SUCCESS", "CUBLAS_STATUS_ALLOC_FAILED"))
+
+
+def _enable_checkpointing(model) -> None:
+    """Градиентные чекпоинты; use_reentrant=False — рекомендуемый режим (корректно работает с autocast)."""
+    try:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    except TypeError:                    # transformers старее 4.35
+        model.gradient_checkpointing_enable()
+
+
+def _grad_scaler(enabled: bool):
+    """GradScaler: в torch ≥ 2.3 — torch.amp.GradScaler, в более старых — torch.cuda.amp.GradScaler."""
+    import torch
+    if hasattr(torch.amp, "GradScaler"):
+        return torch.amp.GradScaler("cuda", enabled=enabled)
+    return torch.cuda.amp.GradScaler(enabled=enabled)
+
+
+def _measure_step(encoder: BiEncoder, cfg, dummy: "TrainPairs", size: int, n_params: int):
+    """Пик памяти (байт) одного шага обучения на худшем случае; None — не поместилось."""
+    import torch
+    reserve = loss = None
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    try:
+        reserve = torch.empty(2 * n_params, dtype=torch.float32, device="cuda")   # место под Adam
+        loss = _loss(encoder, *_step_texts(dummy, range(size)), cfg, pad_to_max=True)
+        loss.backward()
+        torch.cuda.synchronize()
+        return torch.cuda.max_memory_allocated()
+    except Exception as error:           # noqa: BLE001 — отличаем нехватку памяти от прочих ошибок
+        if is_gpu_oom(error):
+            return None
+        raise
+    finally:
+        encoder.model.zero_grad(set_to_none=True)
+        del reserve, loss
+        torch.cuda.empty_cache()
+
+
+def probe_batch_size(encoder: BiEncoder, cfg, candidates=(16, 32, 48, 64, 96, 128, 160, 192, 256, 320, 384, 512),
+                     headroom: float = 0.85) -> int:
+    """
+    Наибольший батч, при котором шаг обучения помещается в память GPU с запасом (headroom).
+
+    Размеры перебираются снизу вверх, и GPU не доводится до переполнения: пик памяти растёт
+    с батчем линейно, поэтому по двум последним замерам предсказывается следующий размер,
+    и он проверяется, только если прогноз помещается. Проверка — на худшем случае: все тексты
+    дополнены до максимальной длины, память под состояние оптимизатора заранее занята.
+    """
+    import torch
+    sizes = sorted(candidates)
     if encoder.device != "cuda":
-        return candidates[-1]
+        return sizes[0]
     model = encoder.model
-    total = torch.cuda.get_device_properties(0).total_memory
     n_params = sum(p.numel() for p in model.parameters())
-    dummy = TrainPairs(queries=["query: " + "слово " * 200] * max(candidates),
-                       positives=["passage: " + "слово " * 400] * max(candidates),
-                       negatives=[["passage: " + "слово " * 400] * cfg.hard_negatives] * max(candidates))
+    largest = sizes[-1]
+    dummy = TrainPairs(queries=["query: " + "слово " * 200] * largest,
+                       positives=["passage: " + "слово " * 400] * largest,
+                       negatives=[["passage: " + "слово " * 400] * cfg.hard_negatives] * largest)
+    torch.cuda.empty_cache()
+    free, total = torch.cuda.mem_get_info()
+    limit = headroom * (free + torch.cuda.memory_reserved())      # доступно этому процессу
+    print(f"  доступно памяти GPU: {(free + torch.cuda.memory_reserved()) / 2 ** 30:.1f} из "
+          f"{total / 2 ** 30:.1f} ГБ, используем до {limit / 2 ** 30:.1f} ГБ")
+
     model.train()
     if cfg.grad_checkpointing:
-        model.gradient_checkpointing_enable()
-    chosen = None
-    for size in candidates:
-        reserve = None
-        try:
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats()
-            reserve = torch.empty(2 * n_params, dtype=torch.float32, device="cuda")   # под Adam
-            loss = _loss(encoder, *_step_texts(dummy, range(size)), cfg, pad_to_max=True)
-            loss.backward()
-            peak = torch.cuda.max_memory_allocated()
-            ok = peak <= headroom * total
-            print(f"  батч {size}: пик памяти {peak / 2 ** 30:.1f} из {total / 2 ** 30:.1f} ГБ"
-                  f"{'' if ok else ' — без запаса'}")
-        except torch.cuda.OutOfMemoryError:
-            ok = False
-            print(f"  батч {size}: не помещается")
-        finally:
-            model.zero_grad(set_to_none=True)
-            del reserve
-            loss = None
-            torch.cuda.empty_cache()
-        if ok:
+        _enable_checkpointing(model)
+    measured, chosen = [], None
+    try:
+        for size in sizes:
+            if len(measured) >= 2:
+                (b1, p1), (b2, p2) = measured[-2:]
+                predicted = p2 + (p2 - p1) / (b2 - b1) * (size - b2)
+                if predicted > limit:
+                    print(f"  батч {size}: по прогнозу {predicted / 2 ** 30:.1f} ГБ — не проверяем")
+                    break
+            peak = _measure_step(encoder, cfg, dummy, size, n_params)
+            if peak is None or peak > limit:
+                print(f"  батч {size}: " + ("не помещается" if peak is None else
+                                            f"пик {peak / 2 ** 30:.1f} ГБ — без запаса"))
+                break
+            print(f"  батч {size}: пик памяти {peak / 2 ** 30:.1f} ГБ")
+            measured.append((size, peak))
             chosen = size
-            break
-    if cfg.grad_checkpointing:
-        model.gradient_checkpointing_disable()
-    model.eval()
+    finally:
+        if cfg.grad_checkpointing:
+            model.gradient_checkpointing_disable()
+        model.eval()
     if chosen is None:
-        raise RuntimeError("Даже минимальный батч не помещается в память GPU. "
-                           "Включите grad_checkpointing или уменьшите max_len_item.")
+        raise RuntimeError("Даже минимальный батч не помещается в память GPU. Проверьте, не занята ли "
+                           "видеокарта другим процессом (nvidia-smi), или уменьшите max_len_item.")
     return chosen
 
 
@@ -291,23 +347,29 @@ def train_biencoder(encoder: BiEncoder, pairs: TrainPairs, cfg, seed: int, log_e
     model = encoder.model
     model.train()
     if cfg.grad_checkpointing:
-        model.gradient_checkpointing_enable()
+        _enable_checkpointing(model)
 
     n = len(pairs.queries)
     steps = max((n // cfg.batch_size) * cfg.epochs, 1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=cfg.lr, total_steps=steps, pct_start=cfg.warmup_frac, anneal_strategy="linear")
-    scaler = torch.amp.GradScaler(enabled=encoder.amp.needs_scaler)     # нужен только для fp16
+    scaler = _grad_scaler(encoder.amp.needs_scaler)          # нужен только для fp16
     rng = np.random.default_rng(seed)
     history, step = [], 0
 
     for _ in range(cfg.epochs):
         order = rng.permutation(n)
         for start in range(0, n - cfg.batch_size + 1, cfg.batch_size):
-            loss = _loss(encoder, *_step_texts(pairs, order[start:start + cfg.batch_size]), cfg)
-            optimizer.zero_grad(set_to_none=True)
-            scaler.scale(loss).backward()
+            try:
+                loss = _loss(encoder, *_step_texts(pairs, order[start:start + cfg.batch_size]), cfg)
+                optimizer.zero_grad(set_to_none=True)
+                scaler.scale(loss).backward()
+            except Exception as error:   # noqa: BLE001
+                if is_gpu_oom(error):
+                    raise RuntimeError(f"Не хватило памяти GPU на шаге {step + 1} при батче {cfg.batch_size}. "
+                                       "Задайте BATCH_SIZE меньше в настройках и перезапустите ядро.") from error
+                raise
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
             scaler.step(optimizer)
@@ -404,20 +466,26 @@ def load_query_embeddings(directory, texts: list, encode_missing=None) -> np.nda
 # ─────────────────────────── отладочная модель ───────────────────────────
 
 def build_debug_encoder(texts: list, device: str = "cpu", vocab_size: int = 2000, dim: int = 32) -> BiEncoder:
-    """Крошечная модель со случайными весами и токенизатором, обученным на переданных текстах.
-    Нужна только для smoke-теста пайплайна без скачивания весов (SMOKE_TEST=1)."""
+    """Крошечная модель со случайными весами и пословным токенизатором, построенным по переданным
+    текстам. Нужна только для smoke-теста пайплайна без скачивания весов (SMOKE_TEST=1).
+    Словарь строится явно — по убыванию частоты, при равенстве по алфавиту: обучаемые токенизаторы
+    библиотеки tokenizers разрешают ничьи в случайном порядке, и тест был бы невоспроизводим."""
+    import re
+    from collections import Counter
+
     import torch
-    from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, trainers
+    from tokenizers import Tokenizer, models, normalizers, pre_tokenizers
     from transformers import BertConfig, BertModel, PreTrainedTokenizerFast
 
-    torch.manual_seed(0)
-    tok = Tokenizer(models.WordPiece(unk_token="[UNK]"))
-    tok.normalizer = normalizers.Sequence([normalizers.NFD(), normalizers.Lowercase()])
+    specials = ["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"]
+    counts = Counter(w for t in texts for w in re.findall(r"\w+|[^\w\s]", t.lower()))
+    words = sorted(counts, key=lambda w: (-counts[w], w))[: vocab_size - len(specials)]
+    tok = Tokenizer(models.WordLevel({w: i for i, w in enumerate(specials + words)}, unk_token="[UNK]"))
+    tok.normalizer = normalizers.Lowercase()
     tok.pre_tokenizer = pre_tokenizers.Whitespace()
-    tok.train_from_iterator(texts, trainers.WordPieceTrainer(
-        vocab_size=vocab_size, special_tokens=["[UNK]", "[CLS]", "[SEP]", "[PAD]", "[MASK]"]))
     fast = PreTrainedTokenizerFast(tokenizer_object=tok, unk_token="[UNK]", pad_token="[PAD]",
                                    cls_token="[CLS]", sep_token="[SEP]", mask_token="[MASK]")
-    model = BertModel(BertConfig(vocab_size=fast.vocab_size, hidden_size=dim, num_hidden_layers=2,
+    torch.manual_seed(0)
+    model = BertModel(BertConfig(vocab_size=len(specials) + len(words), hidden_size=dim, num_hidden_layers=2,
                                  num_attention_heads=2, intermediate_size=2 * dim, max_position_embeddings=512))
     return BiEncoder(model, fast, device)

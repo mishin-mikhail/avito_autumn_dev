@@ -98,22 +98,27 @@ def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel
     Возвращает (модель, лучшая итерация, лучший Recall@k на фолде).
     """
     features = features or RANKER_FEATURES
-    has_pos = train_rows.groupby("gid")["label"].transform("max").to_numpy() > 0
-    rows = train_rows[has_pos]                     # запросы без позитивов ничему не учат
-    dtrain = lgb.Dataset(rows[features].to_numpy(np.float32), label=rows["label"].to_numpy(),
-                         group=_group_sizes(rows["gid"].to_numpy()), feature_name=features,
-                         free_raw_data=True)
+    params = _params(objective, rcfg, seed, n_threads)   # те же параметры и для датасета, и для обучения
+    gid = train_rows["gid"].to_numpy()
+    label = train_rows["label"].to_numpy()
+    # запросы без позитивов ничему не учат
+    keep = np.flatnonzero(pd.Series(label).groupby(gid).transform("max").to_numpy() > 0)
+    # Датасеты собираются сразу (construct): LightGBM переводит признаки в свои гистограммы,
+    # и исходные float32-массивы освобождаются до начала обучения — так ниже пик памяти.
+    dtrain = lgb.Dataset(train_rows[features].to_numpy(np.float32)[keep], label=label[keep],
+                         group=_group_sizes(gid[keep]), feature_name=features,
+                         params=params, free_raw_data=True).construct()
     vq = valid_pool["q"].to_numpy(np.int64)
-    dvalid = lgb.Dataset(valid_pool[features].to_numpy(np.float32), label=valid_pool["label"].to_numpy(),
-                         group=_group_sizes(vq), reference=dtrain, free_raw_data=True)
     v_label = valid_pool["label"].to_numpy(np.float64)
+    dvalid = lgb.Dataset(valid_pool[features].to_numpy(np.float32), label=valid_pool["label"].to_numpy(),
+                         group=_group_sizes(vq), reference=dtrain, params=params, free_raw_data=True).construct()
 
     def recall_metric(preds, _data):
         return f"recall@{k}", pool_recall(vq, valid_rank, v_label, valid_n_rel,
                                           np.asarray(preds, dtype=np.float64), k, decimals), True
 
     booster = lgb.train(
-        _params(objective, rcfg, seed, n_threads), dtrain, num_boost_round=rcfg.max_rounds,
+        params, dtrain, num_boost_round=rcfg.max_rounds,
         valid_sets=[dvalid], valid_names=["fold"], feval=recall_metric,
         callbacks=[lgb.early_stopping(rcfg.early_stopping, first_metric_only=True, verbose=False),
                    lgb.log_evaluation(log_every)],

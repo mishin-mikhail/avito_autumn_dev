@@ -1,0 +1,16 @@
+
+data/*
+!data/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+outputs/
+data_raw/
+data_synth/
+*.parquet
+answer.csv
+*.zip
+*.tar.gz
+*.log
+*.executed.ipynb
+__pycache__/
+.ipynb_checkpoints/

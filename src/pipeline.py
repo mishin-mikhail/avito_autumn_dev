@@ -40,6 +40,10 @@ class ItemLemmaCache:
         self.lem, self.desc_max_chars = lem, desc_max_chars
         self._store: dict = {}          # поле → {item_id: строка лемм}
 
+    def clear(self) -> None:
+        """Освободить память, когда все индексы корпуса уже построены (леммы описаний — сотни МБ)."""
+        self._store.clear()
+
     def _raw(self, field: str, items: pd.DataFrame) -> list:
         if field == "title":
             return items["item_title_raw"].tolist()
