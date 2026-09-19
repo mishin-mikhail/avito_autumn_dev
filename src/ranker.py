@@ -16,16 +16,16 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .candidates import BASE_FEATURES, DENSE_FEATURES, EXT_FEATURES
+from .candidates import BASE_FEATURES, DENSE_FEATURES, EXT_FEATURES, V5_FEATURES
 from .ranking import linear_score, rank_order, pool_recall, weights_vector
 
 STAGE1_FEATURES = ["stage1", "stage1_rank"]
 RANKER_FEATURES = BASE_FEATURES + EXT_FEATURES + STAGE1_FEATURES
 
 
-def ranker_features(use_dense: bool = False) -> list:
-    """Признаки ранкера; с эмбеддингами (v4) добавляются dense и rank_dense_loc."""
-    return RANKER_FEATURES + (DENSE_FEATURES if use_dense else [])
+def ranker_features(use_dense: bool = False, v5: bool = False) -> list:
+    """Признаки ранкера; с эмбеддингами (v4) добавляются dense и rank_dense_loc, в v5 — V5_FEATURES."""
+    return RANKER_FEATURES + (DENSE_FEATURES if use_dense else []) + (V5_FEATURES if v5 else [])
 
 
 def positions_in_query(q: np.ndarray, rank: np.ndarray, score: np.ndarray, decimals: int) -> np.ndarray:

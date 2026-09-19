@@ -14,6 +14,7 @@ import pandas as pd
 from .analysis import attach_labels
 from .candidates import Corpus, QuerySet, Vocabs, build_corpus, build_queries, feature_names, generate_pool
 from .geo import LocationModel
+from .knn_prior import KnnPrior
 from .params import place_text, service_text
 from .priors import ItemStats, MicrocatPrior
 from .utils import timer
@@ -21,6 +22,7 @@ from .utils import timer
 # колонки train, нужные для статистик (чтобы не копировать всю таблицу)
 STATS_COLS = ["lemma_key", "search_category", "search_location_id", "item_id", "item_microcat_id",
               "item_location_id", "item_latitude", "item_longitude"]
+STATS_COLS_V5 = STATS_COLS + ["qtext"]     # + номер текста запроса (knn_prior.train_text_codes)
 V2_LEMMA_FIELDS = ("title", "params", "desc")
 EXT_LEMMA_FIELDS = V2_LEMMA_FIELDS + ("service", "place")
 
@@ -90,10 +92,12 @@ def build_index(name: str, items: pd.DataFrame, *, cache: ItemLemmaCache, vocabs
 
 def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataFrame,
                stats_rows: pd.DataFrame, *, lem, vocabs: Vocabs, cfg, use_item_stats: bool,
-               truth: list = None, ext_cfg=None, query_emb=None, verbose: bool = True):
+               truth: list = None, ext_cfg=None, query_emb=None, text_index=None, verbose: bool = True):
     """
     stats_rows — строки train, по которым считаются статистики (без строк самих запросов!);
-    truth      — эталон: добавляет в пул колонку label.
+    truth      — эталон: добавляет в пул колонку label;
+    text_index — knn_prior.TextIndex (v5): включает P(микрокатегория) по похожим запросам;
+                 тогда в stats_rows нужна колонка qtext.
     Возвращает (QuerySet, пул).
     """
     with timer(f"{name}: статистики и пул"):
@@ -101,6 +105,16 @@ def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataF
             stats_rows["lemma_key"], stats_rows["search_category"],
             vocabs.micro.encode(stats_rows["item_microcat_id"].tolist()), vocabs.micro.size_with_unknown)
         geo = LocationModel(cfg.geo_alpha).fit(stats_rows, items, vocabs.loc)
+        if ext_cfg is not None and getattr(ext_cfg, "geo_v5", False):
+            geo.fit_spread(stats_rows, vocabs.loc, ext_cfg, cfg.geo_near_km)
+        knn = None
+        if text_index is not None:
+            # соседи ищутся только среди текстов, которые есть в статистиках этой выборки
+            knn_model = KnnPrior(ext_cfg.knn_margin, ext_cfg.knn_shrink).fit(
+                stats_rows["qtext"].to_numpy(), vocabs.micro.encode(stats_rows["item_microcat_id"].tolist()),
+                text_index.n, vocabs.micro.size_with_unknown)
+            nbr_idx, nbr_sim = text_index.search(query_emb, knn_model.available, ext_cfg.knn_neighbors)
+            knn = knn_model.transform(nbr_idx, nbr_sim)
         item_stats = None
         if use_item_stats:
             row_of = {v: i for i, v in enumerate(corpus.item_ids)}
@@ -109,7 +123,8 @@ def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataF
             item_stats = ItemStats().fit(stats_rows["lemma_key"], item_idx, corpus.n)
             corpus.log_pop = np.log1p(item_stats.pop).astype(np.float32)
 
-        query_set = build_queries(queries, lem, vocabs, prior, ext=ext_cfg is not None, query_emb=query_emb)
+        query_set = build_queries(queries, lem, vocabs, prior, ext=ext_cfg is not None, query_emb=query_emb,
+                                  knn=knn)
         pool = generate_pool(corpus, query_set, geo, cfg, item_stats, verbose=verbose, ext_cfg=ext_cfg)
         if truth is not None:
             pool = attach_labels(pool, corpus, truth)

@@ -18,6 +18,15 @@
 Расширение v4 (если в корпус переданы вектора объявлений): список
   * src_dense_loc  топ по близости эмбеддингов с приоритетом близких объявлений,
 и признаки dense, rank_dense_loc (DENSE_FEATURES).
+
+Расширение v5 (флаги RankerConfig; по умолчанию выключено, пул v4 не меняется):
+  * src_text_region, src_prior_region, src_dense_region — для «размытых» локаций поиска
+                   (регион или город, из которого часто выбирают соседние города) те же три идеи,
+                   что в text_loc / prior_loc / dense_loc, но с близостью v5: города «ядра» локации
+                   и радиус, подобранный по самой локации (geo.LocationModel.fit_spread);
+  * src_knn_loc    близкие объявления из микрокатегорий, вероятных по похожим запросам train;
+  * src_dense      топ по эмбеддингам без учёта локации;
+и признаки V5_FEATURES.
 """
 from dataclasses import dataclass
 
@@ -39,7 +48,10 @@ BASE_FEATURES = [
 ]
 ITEM_STAT_FEATURES = ["log_pop", "log_memo"]
 SOURCES = ["src_text", "src_text_loc", "src_prior_loc", "src_memo"]
-ALL_SOURCES = SOURCES + ["src_char_loc", "src_dense_loc"]      # src_char_loc — v3, src_dense_loc — v4
+REGION_SOURCES = ["src_text_region", "src_prior_region", "src_dense_region"]
+V5_SOURCES = REGION_SOURCES + ["src_knn_loc", "src_dense"]
+# src_char_loc — v3, src_dense_loc — v4, остальные — v5
+ALL_SOURCES = SOURCES + ["src_char_loc", "src_dense_loc"] + V5_SOURCES
 V2_FIELDS = ("title", "params", "desc")
 
 # признаки расширения v3: пара «запрос — объявление», запрос, объявление
@@ -50,6 +62,11 @@ EXT_QUERY_FEATURES = ["q_len", "q_n_pairs", "q_region", "q_text_cnt", "q_prior_m
 EXT_ITEM_FEATURES = ["i_log_price", "i_title_len", "i_desc_len", "i_phone_hidden", "i_msg_forbidden"]
 EXT_FEATURES = EXT_PAIR_FEATURES + EXT_QUERY_FEATURES + EXT_ITEM_FEATURES
 DENSE_FEATURES = ["dense", "rank_dense_loc"]      # v4, только если есть вектора
+# v5: локация (размытые локации поиска), микрокатегории по соседним запросам, поиск без локации
+V5_GEO_FEATURES = ["loc_pn", "loc_cover", "dist_rel", "q_self_share", "q_diffuse", "rank_region"]
+V5_KNN_FEATURES = ["logp_knn", "knn_rank", "q_knn_sim", "q_knn_max", "rank_knn_loc"]
+V5_DENSE_FEATURES = ["rank_dense"]
+V5_FEATURES = V5_GEO_FEATURES + V5_KNN_FEATURES + V5_DENSE_FEATURES
 
 
 def feature_names(use_item_stats: bool) -> list:
@@ -193,6 +210,8 @@ class QuerySet:
     raw_text: list = None           # исходные тексты (для символьного сходства, v3)
     text_count: np.ndarray = None   # сколько раз «мешок лемм» встречался в статистиках (v3)
     emb: np.ndarray = None          # вектора запросов (v4), квантованные (encoder.quantize)
+    prior_knn: np.ndarray = None    # P(микрокатегория) по похожим запросам train (v5), запросы × микрокатегории
+    knn_sim: np.ndarray = None      # близость лучшего соседа из train (v5): 1 — такой текст уже был
 
     @property
     def n(self) -> int:
@@ -200,11 +219,14 @@ class QuerySet:
 
 
 def build_queries(q: pd.DataFrame, lem, vocabs: Vocabs, prior_model, ext: bool = False,
-                  query_emb: np.ndarray = None) -> QuerySet:
+                  query_emb: np.ndarray = None, knn: tuple = None) -> QuerySet:
+    """knn — (P(микрокатегория) по соседям, близость лучшего соседа), см. knn_prior.KnnPrior."""
     lemma_key = lem.key_many(q["search_query"])
     return QuerySet(
         raw_text=q["search_query"].tolist() if ext else None,
         emb=query_emb,
+        prior_knn=knn[0] if knn else None,
+        knn_sim=knn[1] if knn else None,
         text_count=prior_model.text_counts(lemma_key) if ext else None,
         lemmas=lem.join_many(q["search_query"]),
         lemma_key=lemma_key,
@@ -285,6 +307,12 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
     Расширение v3 включается, если корпус построен с ext_cfg и ext_cfg передан сюда."""
     ext = ext_cfg is not None and corpus.ext is not None
     dense = ext and corpus.ext.emb is not None and qs.emb is not None
+    # v5 — всё по флагам конфига (у v3/v4 их нет или они выключены)
+    geo5 = ext and getattr(ext_cfg, "geo_v5", False)
+    k_region = getattr(ext_cfg, "pool_k_region", 0) if geo5 else 0
+    knn = ext and qs.prior_knn is not None
+    k_knn = getattr(ext_cfg, "pool_k_knn", 0) if knn else 0
+    k_pure = getattr(ext_cfg, "pool_k_dense_pure", 0) if dense else 0
     tie = (corpus.n - 1 - corpus.rank).astype(np.int64)   # меньший item_id → больший тай-брейк
     dec, f = cfg.score_decimals, corpus.fields
     Q = {name: f[name].query_matrix(qs.lemmas) for name in V2_FIELDS}
@@ -298,9 +326,14 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
         list_names.append("src_char_loc")
         if dense:
             list_names.append("src_dense_loc")
+        list_names += ((REGION_SOURCES if dense else REGION_SOURCES[:2]) if k_region else []) \
+            + (["src_knn_loc"] if k_knn else []) + (["src_dense"] if k_pure else [])
         QE = {"service": E.service.query_matrix(qs.lemmas), "place": E.place.query_matrix(qs.lemmas),
               "char": E.char.query_matrix(qs.raw_text)}
         context = _query_context(corpus, qs)
+        if geo5:
+            # размытая локация: у объявлений корпуса её нет совсем или в неё уходит меньше половины переходов
+            diffuse_all = (context["q_region"] > 0) | (geo.self_share[qs.loc] < ext_cfg.region_self_share)
     source_names = list_names + ["src_memo"]
 
     parts = []
@@ -340,6 +373,39 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 # точная (не зависящая от BLAS) близость; float32 — как у остальных плотных скоров
                 dense_sim = exact_dot(qs.emb[sl], E.emb).astype(np.float32)
                 lists["src_dense_loc"] = topk_rows(dense_sim + 3.0 * proximity, ext_cfg.pool_k_dense, tie, dec)
+                if k_pure:
+                    lists["src_dense"] = topk_rows(dense_sim, k_pure, tie, dec)
+            if geo5:
+                loc_pn, loc_cover, radius, self_share = geo.batch_spread(q_loc, corpus)
+                dist_rel = dist / radius[:, None]
+                # близость v5: своя локация, доля от главного города, «ядро» локации, расстояние в своих радиусах
+                prox5 = np.exp(-dist_rel)
+                prox5[~known] = 0.0
+                np.maximum(prox5, same, out=prox5)
+                np.maximum(prox5, loc_pn, out=prox5)
+                np.maximum(prox5, (loc_cover > geo.cover_min).astype(np.float32), out=prox5)
+                diffuse = diffuse_all[sl]
+                if k_region:
+                    d = np.flatnonzero(diffuse)
+                    region = {"src_text_region": text0[d] + 3.0 * prox5[d],
+                              "src_prior_region": prior[d] + prox5[d] + 1e-3 * text0[d]}
+                    if dense:
+                        region["src_dense_region"] = dense_sim[d] + 3.0 * prox5[d]
+                    for name, score in region.items():      # у остальных запросов батча эти списки пустые
+                        top = topk_rows(score, k_region, tie, dec) if len(d) else np.zeros((0, 0), np.int64)
+                        lists[name] = [np.zeros(0, np.int64)] * (stop - start)
+                        for j, r in enumerate(d):
+                            lists[name][r] = top[j]
+                    del region
+                del prox5
+            if knn:
+                pk = qs.prior_knn[sl]
+                knn_item = pk[:, corpus.micro]
+                if k_knn:
+                    lists["src_knn_loc"] = topk_rows(knn_item + proximity + 1e-3 * text0, k_knn, tie, dec)
+                knn_rank = np.empty(pk.shape, dtype=np.int32)
+                np.put_along_axis(knn_rank, np.argsort(-pk, axis=1, kind="stable"),
+                                  np.arange(pk.shape[1], dtype=np.int32)[None, :], axis=1)
             micro_rank = np.empty(qs.prior[sl].shape, dtype=np.int32)
             np.put_along_axis(micro_rank, np.argsort(-qs.prior[sl], axis=1, kind="stable"),
                               np.arange(qs.prior.shape[1], dtype=np.int32)[None, :], axis=1)
@@ -363,7 +429,9 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 flags[k].append(np.isin(uniq, arr))
             if ext:
                 for k in list_names:
-                    ranks[k].append(_positions(uniq, lists[k][r], missing=len(lists[k][r])))
+                    # «нет в списке» = длина списка (у пустых списков v5 — их номинальная длина)
+                    missing = len(lists[k][r]) if k not in REGION_SOURCES else k_region
+                    ranks[k].append(_positions(uniq, lists[k][r], missing=missing))
 
         # --- признаки для строк пула ---
         rr, cc = np.concatenate(rows), np.concatenate(cols)
@@ -394,7 +462,7 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 prior_rank=micro_rank[rr, corpus.micro[cc]].astype(np.float32),
                 dist_km=dist[rr, cc],
                 **{"rank_" + k[4:]: np.concatenate(ranks[k]).astype(np.float32)
-                   for k in list_names if k != "src_dense_loc"},
+                   for k in list_names[:4] if k != "src_dense_loc"},
                 **{name: values[qi] for name, values in context.items()},
                 q_title_max=title_max[rr], q_n_near=n_near[rr],
                 i_log_price=E.log_price[cc], i_title_len=E.title_len[cc], i_desc_len=E.desc_len[cc],
@@ -404,6 +472,26 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 part["dense"] = dense_sim[rr, cc]
                 part["rank_dense_loc"] = np.concatenate(ranks["src_dense_loc"]).astype(np.float32)
                 del dense_sim
+            if geo5:
+                part["loc_pn"] = loc_pn[rr, cc]
+                part["loc_cover"] = loc_cover[rr, cc]
+                part["dist_rel"] = dist_rel[rr, cc]
+                part["q_self_share"] = np.nan_to_num(self_share, nan=-1.0)[rr]   # −1: переходов из локации нет
+                part["q_diffuse"] = diffuse[rr].astype(np.float32)
+                part["rank_region"] = (np.minimum.reduce([np.concatenate(ranks[k]) for k in REGION_SOURCES
+                                                          if k in ranks]).astype(np.float32)
+                                       if k_region else np.float32(k_region))
+                del loc_pn, loc_cover, dist_rel
+            if knn:
+                part["logp_knn"] = np.log(knn_item[rr, cc] + 1e-6).astype(np.float32)
+                part["knn_rank"] = knn_rank[rr, corpus.micro[cc]].astype(np.float32)
+                part["q_knn_sim"] = qs.knn_sim[qi]
+                part["q_knn_max"] = pk.max(axis=1)[rr]
+                part["rank_knn_loc"] = (np.concatenate(ranks["src_knn_loc"]).astype(np.float32) if k_knn
+                                        else np.float32(0))
+                del knn_item, knn_rank, pk
+            if k_pure:
+                part["rank_dense"] = np.concatenate(ranks["src_dense"]).astype(np.float32)
             del service, cov_place, char, micro_rank, n_near
         parts.append(part)
         # освобождаем плотные массивы до следующего батча, иначе пик памяти удваивается

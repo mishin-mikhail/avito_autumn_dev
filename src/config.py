@@ -4,7 +4,7 @@
 Все гиперпараметры живут здесь, а не разбросаны по коду: так проще
 воспроизводить эксперименты и описывать их в README.
 """
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -111,11 +111,36 @@ class RankerConfig:
     max_rounds: int = 1500
     early_stopping: int = 100
 
+    # --- v5 (значения по умолчанию выключают всё новое: пул и признаки v3/v4 не меняются) ---
+    # 1. «размытые» локации поиска: регион или город, откуда чаще выбирают объявления в других городах
+    geo_v5: bool = False                # признаки loc_pn, loc_cover, dist_rel, q_self_share, q_diffuse
+    region_cover_mass: float = 0.95     # «ядро» локации поиска — города, куда уходит 95% переходов
+    region_radius_quantile: float = 0.8 # радиус локации поиска — этот квантиль расстояний выбранных объявлений
+    region_radius_max_km: float = 300.0
+    region_self_share: float = 0.5      # размытая = в свою же локацию уходит меньше этой доли переходов
+    pool_k_region: int = 0              # длина каждого из трёх списков для размытых локаций (0 — выкл.)
+    # 2. P(микрокатегория) по похожим запросам train (соседи по эмбеддингам)
+    pool_k_knn: int = 0                 # список «близкие объявления вероятных микрокатегорий по соседям»
+    knn_neighbors: int = 30             # сколько ближайших текстов train рассматривать
+    knn_margin: float = 0.05            # вес соседа = max(sim − sim_лучшего + margin, 0)
+    knn_shrink: float = 2.0             # доверие к тексту с n строками: n / (n + shrink)
+    # 3. поиск по эмбеддингам без учёта локации
+    pool_k_dense_pure: int = 0
+
     def as_dict(self) -> dict:
         return asdict(self)
 
 
 RANKER_CFG = RankerConfig()
+
+# v5: что меняется относительно v4 (ноутбук 05_ranker_v5.ipynb)
+RANKER_V5 = replace(
+    RANKER_CFG, version="v5",
+    uniform_unseen_texts=True,          # как в v4
+    geo_v5=True, pool_k_region=200,     # размытые локации
+    pool_k_knn=300,                     # микрокатегории по соседним запросам
+    pool_k_dense=400, pool_k_dense_pure=150,   # расширенный поиск по эмбеддингам (в v4: 300 и 0)
+)
 
 
 @dataclass(frozen=True)
