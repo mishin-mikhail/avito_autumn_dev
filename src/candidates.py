@@ -326,7 +326,9 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
         list_names.append("src_char_loc")
         if dense:
             list_names.append("src_dense_loc")
-        list_names += ((REGION_SOURCES if dense else REGION_SOURCES[:2]) if k_region else []) \
+        wanted = getattr(ext_cfg, "region_lists", ("text", "prior", "dense"))
+        region_names = [f"src_{kind}_region" for kind in wanted if kind != "dense" or dense]
+        list_names += (region_names if k_region else []) \
             + (["src_knn_loc"] if k_knn else []) + (["src_dense"] if k_pure else [])
         QE = {"service": E.service.query_matrix(qs.lemmas), "place": E.place.query_matrix(qs.lemmas),
               "char": E.char.query_matrix(qs.raw_text)}
@@ -387,9 +389,12 @@ def generate_pool(corpus: Corpus, qs: QuerySet, geo, cfg, item_stats=None, verbo
                 diffuse = diffuse_all[sl]
                 if k_region:
                     d = np.flatnonzero(diffuse)
-                    region = {"src_text_region": text0[d] + 3.0 * prox5[d],
-                              "src_prior_region": prior[d] + prox5[d] + 1e-3 * text0[d]}
-                    if dense:
+                    region = {}
+                    if "src_text_region" in region_names:
+                        region["src_text_region"] = text0[d] + 3.0 * prox5[d]
+                    if "src_prior_region" in region_names:
+                        region["src_prior_region"] = prior[d] + prox5[d] + 1e-3 * text0[d]
+                    if "src_dense_region" in region_names:
                         region["src_dense_region"] = dense_sim[d] + 3.0 * prox5[d]
                     for name, score in region.items():      # у остальных запросов батча эти списки пустые
                         top = topk_rows(score, k_region, tie, dec) if len(d) else np.zeros((0, 0), np.int64)

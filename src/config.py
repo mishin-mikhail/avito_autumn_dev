@@ -119,6 +119,7 @@ class RankerConfig:
     region_radius_max_km: float = 300.0
     region_self_share: float = 0.5      # размытая = в свою же локацию уходит меньше этой доли переходов
     pool_k_region: int = 0              # длина каждого из трёх списков для размытых локаций (0 — выкл.)
+    region_lists: tuple = ("text", "prior", "dense")   # какие из трёх списков строить (v6: только dense)
     # 2. P(микрокатегория) по похожим запросам train (соседи по эмбеддингам)
     pool_k_knn: int = 0                 # список «близкие объявления вероятных микрокатегорий по соседям»
     knn_neighbors: int = 30             # сколько ближайших текстов train рассматривать
@@ -126,6 +127,8 @@ class RankerConfig:
     knn_shrink: float = 2.0             # доверие к тексту с n строками: n / (n + shrink)
     # 3. поиск по эмбеддингам без учёта локации
     pool_k_dense_pure: int = 0
+    # v6: итоговый скор — среднее мест в запросе по ранкерам всех целевых функций (если на фолде лучше)
+    ensemble: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -140,6 +143,16 @@ RANKER_V5 = replace(
     geo_v5=True, pool_k_region=200,     # размытые локации
     pool_k_knn=300,                     # микрокатегории по соседним запросам
     pool_k_dense=400, pool_k_dense_pure=150,   # расширенный поиск по эмбеддингам (в v4: 300 и 0)
+)
+
+# v6: по разбору v5 — из списков для размытых локаций оставлен только список по эмбеддингам
+# (текстовый и «по микрокатегориям» ничего не добавили к полноте), он и список src_dense_loc длиннее;
+# итог — среднее двух ранкеров. Эмбеддинги — второй раунд дообучения (EMB_CFG_V6).
+RANKER_V6 = replace(
+    RANKER_V5, version="v6",
+    region_lists=("dense",), pool_k_region=300,
+    pool_k_dense=500,
+    ensemble=True,
 )
 
 
@@ -175,8 +188,24 @@ class EmbeddingConfig:
     # оценка качества поиска по векторам (Recall@100) до и после дообучения
     zero_shot_queries: int = 2000
 
+    # --- версия артефакта ---
+    version: str = "v4"
+    artifact_name: str = "embeddings"      # папка артефакта внутри WORK_DIR
+    init_model: str = ""                   # дообучать уже дообученную модель (путь внутри WORK_DIR); "" — с нуля
+    # не брать в трудные негативы объявления той же микрокатегории, что и позитив:
+    # это чаще всего тоже подходящие объявления («Скупка телевизоров» для «скупка б/у техники»)
+    neg_exclude_same_micro: bool = False
+
     def as_dict(self) -> dict:
         return asdict(self)
 
 
 EMB_CFG = EmbeddingConfig()
+
+# v6: второй раунд дообучения — от модели v4, с очищенными трудными негативами
+EMB_CFG_V6 = replace(
+    EMB_CFG, version="v6", artifact_name="embeddings_v6", init_model="embeddings/model",
+    neg_exclude_same_micro=True, hard_neg_skip=3, hard_neg_depth=100,
+    train_pairs=0,          # все свободные пары train (~264 тыс.)
+    lr=1e-5,                # модель уже дообучена — шаг меньше
+)

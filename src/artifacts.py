@@ -15,10 +15,11 @@ from .paths import KAGGLE_INPUT, get_work_dir, is_kaggle
 MARKER = "item_embeddings.npy"
 
 
-def find_embeddings_dir(required: bool = True):
+def find_embeddings_dir(required: bool = True, name: str = "embeddings"):
+    """name — папка артефакта внутри WORK_DIR (v6: embeddings_v6)."""
     env = os.environ.get("EMB_DIR")
     candidates = [Path(env)] if env else []
-    candidates.append(get_work_dir() / "embeddings")
+    candidates.append(get_work_dir() / name)
     if is_kaggle():
         candidates += sorted({p.parent for p in KAGGLE_INPUT.glob(f"**/{MARKER}")})
 

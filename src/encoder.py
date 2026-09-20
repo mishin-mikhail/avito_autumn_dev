@@ -188,18 +188,27 @@ def dense_recall(query_emb: np.ndarray, item_emb: np.ndarray, positive_idx: np.n
 
 
 def mine_hard_negatives(query_emb: np.ndarray, item_emb: np.ndarray, positive_idx: np.ndarray,
-                        n_neg: int, skip_top: int, depth: int, seed: int, device: str = "cpu") -> np.ndarray:
+                        n_neg: int, skip_top: int, depth: int, seed: int, device: str = "cpu",
+                        positive_group: np.ndarray = None, item_group: np.ndarray = None) -> np.ndarray:
     """
     Трудные негативы: случайные объявления из окна рангов [skip_top, depth) по близости к запросу
     (собственный позитив исключается).
     Самый верх не берём намеренно: ближайшие объявления часто тоже подходят запросу — просто
     пользователь выбрал другое. Учить модель отталкивать их — значит портить полноту.
+    positive_group / item_group (v6) — коды микрокатегорий позитива и объявлений корпуса:
+    объявления той же микрокатегории в негативы не берутся (окно ищется глубже, до 2·depth).
     """
-    top = _sim_topk(query_emb, item_emb, depth + 1, device)
+    filtered = positive_group is not None
+    top = _sim_topk(query_emb, item_emb, (2 * depth if filtered else depth) + 1, device)
     rng = np.random.default_rng(seed)
     out = np.empty((len(top), n_neg), dtype=np.int64)
     for row in range(len(top)):
-        window = [i for i in top[row] if i != positive_idx[row]][skip_top:depth]
+        cand = top[row][top[row] != positive_idx[row]]
+        if filtered:
+            cand = cand[item_group[cand] != positive_group[row]]
+        window = cand[skip_top:depth]
+        if len(window) == 0:              # редкий случай: все ближайшие — той же микрокатегории
+            window = cand if len(cand) else top[row][top[row] != positive_idx[row]]
         out[row] = rng.choice(window, size=n_neg, replace=len(window) < n_neg)
     return out
 

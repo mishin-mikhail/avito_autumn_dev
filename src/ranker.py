@@ -126,6 +126,16 @@ def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel
     return booster, booster.best_iteration, booster.best_score["fold"][f"recall@{k}"]
 
 
+def rank_average(pool: pd.DataFrame, item_rank: np.ndarray, scores: list, decimals: int) -> np.ndarray:
+    """Ансамбль (v6): минус сумма мест строки внутри своего запроса по каждому скору.
+    Места не зависят от шкалы скоров, поэтому lambdarank и binary складываются честно."""
+    q = pool["q"].to_numpy(np.int64)
+    total = np.zeros(len(pool), dtype=np.float64)
+    for score in scores:
+        total += positions_in_query(q, item_rank, score, decimals)
+    return -total
+
+
 def ranker_score(booster, pool: pd.DataFrame, n_threads: int, features: list = None) -> np.ndarray:
     return booster.predict(pool[features or RANKER_FEATURES].to_numpy(np.float32),
                            num_iteration=booster.best_iteration, num_threads=n_threads).astype(np.float64)
