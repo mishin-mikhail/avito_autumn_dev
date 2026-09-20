@@ -15,14 +15,16 @@
 
 1. `pip install -r requirements.txt`
 2. Данные положить в `data/` (`train.parquet`, `benchmark_queries.parquet`, `benchmark_items.parquet`), артефакты эмбеддингов в `artifacts/embeddings_v6` и `artifacts/embeddings_large` (см. ниже).
-3. Открыть `notebooks/08_ranker_v8.ipynb` и выполнить все ячейки: ~1 ч на CPU, 16 ГБ RAM.
+3. Открыть `notebooks/08_ranker_v8.ipynb` и выполнить все ячейки: ~1 ч на CPU, 16 ГБ RAM (пик ~15 ГБ, другие ядра лучше остановить).
 
 Результат: `outputs/answer.csv` с md5 `a2415d473e1a6d441a1822128d33ca4a`.
 
 **Артефакты эмбеддингов:** дообученные модели и их вектора, [HF: avito-candgen-artifacts](https://huggingface.co/datasets/survivle/avito-candgen-artifacts) (`embeddings_v6.zip` ~1,7 ГБ, `embeddings_large.zip` ~3 ГБ):
 ```bash
-huggingface-cli download survivle/avito-candgen-artifacts embeddings_v6.zip embeddings_large.zip --repo-type dataset --local-dir artifacts
-cd artifacts && unzip embeddings_v6.zip && unzip embeddings_large.zip
+cd artifacts
+wget https://huggingface.co/datasets/survivle/avito-candgen-artifacts/resolve/main/embeddings_v6.zip
+wget https://huggingface.co/datasets/survivle/avito-candgen-artifacts/resolve/main/embeddings_large.zip
+unzip embeddings_v6.zip && unzip embeddings_large.zip
 ```
 Собрать их заново можно на GPU (~7 ч на A100 20 ГБ): `03_embeddings.ipynb` с `EMB_VERSION = "v4"`, затем `"v6"` и `"large"`.
 
@@ -61,7 +63,7 @@ cd artifacts && unzip embeddings_v6.zip && unzip embeddings_large.zip
   * Раунд 2: из негативов исключены объявления той же микрокатегории, среди них много на самом деле подходящих → 0,420.
 * **Второй bi-encoder:** `intfloat/multilingual-e5-large`, один раунд по схеме раунда 2 на 150 тыс. пар → Recall@100 0,3925 → 0,422.
 * **Смесь эмбеддингов:** нормированные вектора двух моделей склеиваются с весами √0,5, и скалярное произведение равно среднему двух косинусов. Так смесь работает во всём пайплайне без изменений кода: в списке кандидатов, в признаке близости и в поиске похожих запросов.
-* **Похожие запросы:** 30 ближайших по эмбеддингам текстов train дают своё распределение микрокатегорий. Для новых текстов оно угадывает микрокатегорию эталона первой в 67% случаев против 47% у лемм.
+* **Похожие запросы:** 30 ближайших по эмбеддингам текстов train дают своё распределение микрокатегорий. Для новых текстов оно угадывает микрокатегорию эталона первой в 68% случаев против 47% у лемм.
 * **Ранкер:** LightGBM, `lambdarank` и `binary`; итог: среднее мест кандидата в запросе по обоим.
 
 ## Валидация
@@ -89,6 +91,8 @@ cd artifacts && unzip embeddings_v6.zip && unzip embeddings_large.zip
 * **LightGBM** 4.6.0: `deterministic=True`, `force_row_wise=True`.
 * md5 `answer.csv` проверен при разных `PYTHONHASHSEED`, версиях numpy и pandas и числе потоков.
 * Нейросеть в ноутбуках ответа не запускается: вектора берутся из артефакта с md5 в манифесте.
+* Всё считается локально, внешние API не используются. Из интернета скачиваются только артефакты (выше) и, для дообучения в `03`, открытые веса моделей с Hugging Face.
+* Никаких ручных правил и ответов под конкретные `query_id`: всё, что использует решение, получено из train по общим правилам.
 
 ## Структура
 
@@ -96,7 +100,7 @@ cd artifacts && unzip embeddings_v6.zip && unzip embeddings_large.zip
 notebooks/   01 EDA и baseline (v2) · 02 ранкер (v3) · 03 дообучение энкодеров (GPU)
              04-06 пул с эмбеддингами и ранкер (v4-v6) · финальный: 08_ranker_v8
 src/         код решения; все параметры в src/config.py
-tests/       синтетические данные для smoke-теста: SMOKE_TEST=True в любом ноутбуке
+tests/       синтетические данные для проверки кода без настоящих файлов (SMOKE_TEST=True)
 ```
 
 Открытые библиотеки: numpy, pandas, scipy, scikit-learn, pyarrow, pymorphy3, LightGBM, PyTorch, transformers. Модели: `intfloat/multilingual-e5-base` и `intfloat/multilingual-e5-large` (MIT); в v4 для сравнения `deepvk/USER-base`.
