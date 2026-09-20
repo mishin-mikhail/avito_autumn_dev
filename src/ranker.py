@@ -2,12 +2,12 @@
 Обученный ранкер (LightGBM) поверх пула кандидатов.
 
 Схема:
-  1. stage1 — линейная формула v2 (веса из отправки v2): её скор и ранг — признаки ранкера
+  1. stage1 - линейная формула v2 (веса из отправки v2): её скор и ранг - признаки ранкера
      и основа для отбора «трудных» негативов;
-  2. обучающая выборка — фолды запросов из train; для каждого запроса берутся все позитивы
+  2. обучающая выборка - фолды запросов из train; для каждого запроса берутся все позитивы
      и часть негативов (трудные, символьно похожие, случайные), чтобы не учиться на ~20 млн строк;
-  3. ранняя остановка — по Recall@50 на полном пуле отдельного фолда;
-  4. предсказание — по всему пулу, топ-50 по скору ранкера.
+  3. ранняя остановка - по Recall@50 на полном пуле отдельного фолда;
+  4. предсказание - по всему пулу, топ-50 по скору ранкера.
 
 Детерминизм LightGBM: deterministic=True, force_row_wise=True, фиксированные сиды и число
 потоков, без бэггинга строк. Скоры округляются перед сортировкой, как и в линейной формуле.
@@ -24,12 +24,12 @@ RANKER_FEATURES = BASE_FEATURES + EXT_FEATURES + STAGE1_FEATURES
 
 
 def ranker_features(use_dense: bool = False, v5: bool = False) -> list:
-    """Признаки ранкера; с эмбеддингами (v4) добавляются dense и rank_dense_loc, в v5 — V5_FEATURES."""
+    """Признаки ранкера; с эмбеддингами (v4) добавляются dense и rank_dense_loc, в v5 - V5_FEATURES."""
     return RANKER_FEATURES + (DENSE_FEATURES if use_dense else []) + (V5_FEATURES if v5 else [])
 
 
 def positions_in_query(q: np.ndarray, rank: np.ndarray, score: np.ndarray, decimals: int) -> np.ndarray:
-    """Место каждой строки внутри своего запроса при сортировке по score (0 — лучшая)."""
+    """Место каждой строки внутри своего запроса при сортировке по score (0 - лучшая)."""
     order = rank_order(q, rank, score, decimals)
     qs = q[order]
     first = np.flatnonzero(np.r_[True, qs[1:] != qs[:-1]])
@@ -93,8 +93,8 @@ def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel
                  objective: str, rcfg, seed: int, n_threads: int, k: int, decimals: int, log_every: int = 100,
                  features: list = None):
     """
-    train_rows — выборка строк с колонками gid (номер запроса, строки сгруппированы), label и признаками;
-    valid_pool — полный пул фолда для ранней остановки (с label), valid_rank — ранги item_id его строк.
+    train_rows - выборка строк с колонками gid (номер запроса, строки сгруппированы), label и признаками;
+    valid_pool - полный пул фолда для ранней остановки (с label), valid_rank - ранги item_id его строк.
     Возвращает (модель, лучшая итерация, лучший Recall@k на фолде).
     """
     features = features or RANKER_FEATURES
@@ -104,7 +104,7 @@ def train_ranker(train_rows: pd.DataFrame, valid_pool: pd.DataFrame, valid_n_rel
     # запросы без позитивов ничему не учат
     keep = np.flatnonzero(pd.Series(label).groupby(gid).transform("max").to_numpy() > 0)
     # Датасеты собираются сразу (construct): LightGBM переводит признаки в свои гистограммы,
-    # и исходные float32-массивы освобождаются до начала обучения — так ниже пик памяти.
+    # и исходные float32-массивы освобождаются до начала обучения - так ниже пик памяти.
     dtrain = lgb.Dataset(train_rows[features].to_numpy(np.float32)[keep], label=label[keep],
                          group=_group_sizes(gid[keep]), feature_name=features,
                          params=params, free_raw_data=True).construct()

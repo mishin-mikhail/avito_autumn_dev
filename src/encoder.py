@@ -5,7 +5,7 @@
 поиск их не находит («перевозка груза» → «грузоперевозки», «замена гидроаккумулятора»
 → «ремонт скважин»). Эмбеддинги дают отдельный список кандидатов и признак близости.
 
-Обучение — InfoNCE: в батче каждый запрос сближается со «своим» объявлением и
+Обучение - InfoNCE: в батче каждый запрос сближается со «своим» объявлением и
 отталкивается от всех остальных объявлений батча и от трудных негативов
 (похожие объявления из корпуса, которые пользователь не выбрал).
 Чем больше батч, тем больше негативов видит модель, поэтому размер батча подбирается
@@ -15,11 +15,11 @@
 
 Воспроизводимость.
   * Обучение на GPU бит-в-бит повторяется только на том же железе, поэтому результат
-    обучения — артефакт: вектора объявлений И вектора всех запросов, которые нужны
+    обучения - артефакт: вектора объявлений И вектора всех запросов, которые нужны
     ноутбуку 04. Сам ноутбук 04 нейросеть не запускает.
   * Вектора квантуются в целые числа (QUANT_SCALE). Скалярное произведение целых чисел,
     посчитанное во float64, точное при любом порядке сложения, поэтому близость
-    запрос–объявление не зависит от BLAS и числа потоков на машине проверяющего.
+    запрос-объявление не зависит от BLAS и числа потоков на машине проверяющего.
 """
 import json
 import os
@@ -34,13 +34,13 @@ from .repro import file_md5
 
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
-QUANT_SCALE = 2 ** 14      # |x| ≤ 1 → |q| ≤ 2^14; сумма 768 произведений < 2^38 — точно во float64
+QUANT_SCALE = 2 ** 14      # |x| ≤ 1 → |q| ≤ 2^14; сумма 1024 произведений < 2^39 - точно во float64
 
 
 # ─────────────────────────── тексты ───────────────────────────
 
 def query_texts(queries: pd.DataFrame) -> list:
-    """Запрос + фильтры: фильтр — часть намерения пользователя."""
+    """Запрос + фильтры: фильтр - часть намерения пользователя."""
     return [f"{QUERY_PREFIX}{q}" + (f" | {f}" if f else "")
             for q, f in zip(queries["search_query"], queries["search_infm_params_text"])]
 
@@ -93,9 +93,9 @@ def choose_amp(amp_dtype: str, info: dict) -> Amp:
 
 def fetch_model(source) -> Path:
     """
-    Локальная папка с моделью. source — путь к уже скачанной папке или имя на Hugging Face.
+    Локальная папка с моделью. source - путь к уже скачанной папке или имя на Hugging Face.
     Скачиваются только нужные файлы (конфиг, токенизатор, веса в одном формате), без ONNX
-    и дублей весов. Зеркало задаётся переменной окружения HF_ENDPOINT, кэш — HF_HOME.
+    и дублей весов. Зеркало задаётся переменной окружения HF_ENDPOINT, кэш - HF_HOME.
     """
     path = Path(str(source)).expanduser()
     if path.is_dir():
@@ -122,12 +122,12 @@ class BiEncoder:
 
     @classmethod
     def from_pretrained(cls, source, device: str = "cpu", amp: Amp = Amp(False, "off")) -> "BiEncoder":
-        """source — имя модели на Hugging Face или путь к скачанной папке."""
+        """source - имя модели на Hugging Face или путь к скачанной папке."""
         from transformers import AutoModel, AutoTokenizer
         source = str(source)
         return cls(AutoModel.from_pretrained(source), AutoTokenizer.from_pretrained(source), device, amp)
 
-    load = from_pretrained      # загрузка сохранённой дообученной модели — то же самое
+    load = from_pretrained      # загрузка сохранённой дообученной модели - то же самое
 
     def save(self, directory) -> None:
         directory = Path(directory)
@@ -147,7 +147,7 @@ class BiEncoder:
         return torch.nn.functional.normalize(emb.float(), p=2, dim=1)
 
     def encode(self, texts: list, max_len: int, batch_size: int = 256, log_every: int = 0) -> np.ndarray:
-        """Вектора текстов (float32). Тексты кодируются в порядке длины — так в батче меньше
+        """Вектора текстов (float32). Тексты кодируются в порядке длины - так в батче меньше
         паддинга и кодирование заметно быстрее; на выходе порядок исходный."""
         import torch
         self.model.eval()
@@ -193,9 +193,9 @@ def mine_hard_negatives(query_emb: np.ndarray, item_emb: np.ndarray, positive_id
     """
     Трудные негативы: случайные объявления из окна рангов [skip_top, depth) по близости к запросу
     (собственный позитив исключается).
-    Самый верх не берём намеренно: ближайшие объявления часто тоже подходят запросу — просто
-    пользователь выбрал другое. Учить модель отталкивать их — значит портить полноту.
-    positive_group / item_group (v6) — коды микрокатегорий позитива и объявлений корпуса:
+    Самый верх не берём намеренно: ближайшие объявления часто тоже подходят запросу - просто
+    пользователь выбрал другое. Учить модель отталкивать их - значит портить полноту.
+    positive_group / item_group (v6) - коды микрокатегорий позитива и объявлений корпуса:
     объявления той же микрокатегории в негативы не берутся (окно ищется глубже, до 2·depth).
     """
     filtered = positive_group is not None
@@ -207,7 +207,7 @@ def mine_hard_negatives(query_emb: np.ndarray, item_emb: np.ndarray, positive_id
         if filtered:
             cand = cand[item_group[cand] != positive_group[row]]
         window = cand[skip_top:depth]
-        if len(window) == 0:              # редкий случай: все ближайшие — той же микрокатегории
+        if len(window) == 0:              # редкий случай: все ближайшие - той же микрокатегории
             window = cand if len(cand) else top[row][top[row] != positive_idx[row]]
         out[row] = rng.choice(window, size=n_neg, replace=len(window) < n_neg)
     return out
@@ -242,7 +242,7 @@ def is_gpu_oom(error: BaseException) -> bool:
     """
     Нехватка памяти GPU. На срезах MIG (например, A100 20 ГБ) PyTorch при переполнении
     памяти не может запросить NVML и падает не с OutOfMemoryError, а с RuntimeError
-    «NVML_SUCCESS == r INTERNAL ASSERT FAILED» — по смыслу это та же нехватка памяти.
+    «NVML_SUCCESS == r INTERNAL ASSERT FAILED» - по смыслу это та же нехватка памяти.
     """
     import torch
     if isinstance(error, torch.cuda.OutOfMemoryError):
@@ -253,15 +253,27 @@ def is_gpu_oom(error: BaseException) -> bool:
 
 
 def _enable_checkpointing(model) -> None:
-    """Градиентные чекпоинты; use_reentrant=False — рекомендуемый режим (корректно работает с autocast)."""
+    """Градиентные чекпоинты; use_reentrant=False - рекомендуемый режим (корректно работает с autocast)."""
     try:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     except TypeError:                    # transformers старее 4.35
         model.gradient_checkpointing_enable()
 
 
+def _freeze_word_embeddings(model, cfg) -> None:
+    """Заморозить матрицу эмбеддингов слов (large: 256 млн из 560 млн параметров). Состояние Adam
+    для неё не хранится, и на GPU остаётся место под батч вдвое больше; дообучение от этого почти
+    не страдает - меняются в основном слои трансформера."""
+    if getattr(cfg, "freeze_word_embeddings", False):
+        model.get_input_embeddings().weight.requires_grad_(False)
+
+
+def _trainable(model) -> list:
+    return [p for p in model.parameters() if p.requires_grad]
+
+
 def _grad_scaler(enabled: bool):
-    """GradScaler: в torch ≥ 2.3 — torch.amp.GradScaler, в более старых — torch.cuda.amp.GradScaler."""
+    """GradScaler: в torch ≥ 2.3 - torch.amp.GradScaler, в более старых - torch.cuda.amp.GradScaler."""
     import torch
     if hasattr(torch.amp, "GradScaler"):
         return torch.amp.GradScaler("cuda", enabled=enabled)
@@ -269,7 +281,7 @@ def _grad_scaler(enabled: bool):
 
 
 def _measure_step(encoder: BiEncoder, cfg, dummy: "TrainPairs", size: int, n_params: int):
-    """Пик памяти (байт) одного шага обучения на худшем случае; None — не поместилось."""
+    """Пик памяти (байт) одного шага обучения на худшем случае; None - не поместилось."""
     import torch
     reserve = loss = None
     torch.cuda.empty_cache()
@@ -280,7 +292,7 @@ def _measure_step(encoder: BiEncoder, cfg, dummy: "TrainPairs", size: int, n_par
         loss.backward()
         torch.cuda.synchronize()
         return torch.cuda.max_memory_allocated()
-    except Exception as error:           # noqa: BLE001 — отличаем нехватку памяти от прочих ошибок
+    except Exception as error:           # noqa: BLE001 - отличаем нехватку памяти от прочих ошибок
         if is_gpu_oom(error):
             return None
         raise
@@ -297,7 +309,7 @@ def probe_batch_size(encoder: BiEncoder, cfg, candidates=(16, 32, 48, 64, 96, 12
 
     Размеры перебираются снизу вверх, и GPU не доводится до переполнения: пик памяти растёт
     с батчем линейно, поэтому по двум последним замерам предсказывается следующий размер,
-    и он проверяется, только если прогноз помещается. Проверка — на худшем случае: все тексты
+    и он проверяется, только если прогноз помещается. Проверка - на худшем случае: все тексты
     дополнены до максимальной длины, память под состояние оптимизатора заранее занята.
     """
     import torch
@@ -305,7 +317,8 @@ def probe_batch_size(encoder: BiEncoder, cfg, candidates=(16, 32, 48, 64, 96, 12
     if encoder.device != "cuda":
         return sizes[0]
     model = encoder.model
-    n_params = sum(p.numel() for p in model.parameters())
+    _freeze_word_embeddings(model, cfg)
+    n_params = sum(p.numel() for p in _trainable(model))       # состояние Adam - только у обучаемых
     largest = sizes[-1]
     dummy = TrainPairs(queries=["query: " + "слово " * 200] * largest,
                        positives=["passage: " + "слово " * 400] * largest,
@@ -326,12 +339,12 @@ def probe_batch_size(encoder: BiEncoder, cfg, candidates=(16, 32, 48, 64, 96, 12
                 (b1, p1), (b2, p2) = measured[-2:]
                 predicted = p2 + (p2 - p1) / (b2 - b1) * (size - b2)
                 if predicted > limit:
-                    print(f"  батч {size}: по прогнозу {predicted / 2 ** 30:.1f} ГБ — не проверяем")
+                    print(f"  батч {size}: по прогнозу {predicted / 2 ** 30:.1f} ГБ - не проверяем")
                     break
             peak = _measure_step(encoder, cfg, dummy, size, n_params)
             if peak is None or peak > limit:
                 print(f"  батч {size}: " + ("не помещается" if peak is None else
-                                            f"пик {peak / 2 ** 30:.1f} ГБ — без запаса"))
+                                            f"пик {peak / 2 ** 30:.1f} ГБ - без запаса"))
                 break
             print(f"  батч {size}: пик памяти {peak / 2 ** 30:.1f} ГБ")
             measured.append((size, peak))
@@ -348,19 +361,20 @@ def probe_batch_size(encoder: BiEncoder, cfg, candidates=(16, 32, 48, 64, 96, 12
 
 def train_biencoder(encoder: BiEncoder, pairs: TrainPairs, cfg, seed: int, log_every: int = 100):
     """
-    Дообучение InfoNCE: для каждого запроса батча «свой» документ — позитив, а негативы —
+    Дообучение InfoNCE: для каждого запроса батча «свой» документ - позитив, а негативы -
     позитивы остальных запросов батча плюс все трудные негативы батча.
     """
     import torch
     torch.manual_seed(seed)
     model = encoder.model
+    _freeze_word_embeddings(model, cfg)
     model.train()
     if cfg.grad_checkpointing:
         _enable_checkpointing(model)
 
     n = len(pairs.queries)
     steps = max((n // cfg.batch_size) * cfg.epochs, 1)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(_trainable(model), lr=cfg.lr, weight_decay=0.01)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer, max_lr=cfg.lr, total_steps=steps, pct_start=cfg.warmup_frac, anneal_strategy="linear")
     scaler = _grad_scaler(encoder.amp.needs_scaler)          # нужен только для fp16
@@ -380,7 +394,7 @@ def train_biencoder(encoder: BiEncoder, pairs: TrainPairs, cfg, seed: int, log_e
                                        "Задайте BATCH_SIZE меньше в настройках и перезапустите ядро.") from error
                 raise
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(_trainable(model), cfg.max_grad_norm)
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
@@ -427,7 +441,7 @@ def exact_dot(query_q: np.ndarray, item_q: np.ndarray, chunk: int = 16384) -> np
     """
     Косинусная близость квантованных векторов (запросы × объявления), float64.
     Произведения и суммы целых чисел < 2^53 во float64 точны, поэтому результат одинаков
-    при любом порядке сложения внутри BLAS — на любой машине и при любом числе потоков.
+    при любом порядке сложения внутри BLAS - на любой машине и при любом числе потоков.
     """
     q64 = query_q.astype(np.float64)
     out = np.empty((len(query_q), len(item_q)), dtype=np.float64)
@@ -449,7 +463,7 @@ def _lookup(keys, saved_keys, matrix: np.ndarray, what: str):
 
 
 def load_item_embeddings(directory, item_ids) -> np.ndarray:
-    """Квантованные вектора в порядке строк корпуса. Нет вектора — нулевой (близость 0)."""
+    """Квантованные вектора в порядке строк корпуса. Нет вектора - нулевой (близость 0)."""
     directory = Path(directory)
     saved = pd.read_parquet(directory / "items.parquet")["item_id"].tolist()
     emb, _ = _lookup(list(item_ids), saved, np.load(directory / "item_embeddings.npy"), "объявлений")
@@ -460,7 +474,7 @@ def load_query_embeddings(directory, texts: list, encode_missing=None) -> np.nda
     """
     Квантованные вектора запросов по их текстам. Если каких-то текстов в артефакте нет
     (например, артефакт собран в режиме DRY_RUN), их можно докодировать функцией
-    encode_missing(texts) -> np.ndarray — но тогда результат будет зависеть от железа.
+    encode_missing(texts) -> np.ndarray - но тогда результат будет зависеть от железа.
     """
     directory = Path(directory)
     saved = pd.read_parquet(directory / "queries.parquet")["text"].tolist()
@@ -477,7 +491,7 @@ def load_query_embeddings(directory, texts: list, encode_missing=None) -> np.nda
 def build_debug_encoder(texts: list, device: str = "cpu", vocab_size: int = 2000, dim: int = 32) -> BiEncoder:
     """Крошечная модель со случайными весами и пословным токенизатором, построенным по переданным
     текстам. Нужна только для smoke-теста пайплайна без скачивания весов (SMOKE_TEST=1).
-    Словарь строится явно — по убыванию частоты, при равенстве по алфавиту: обучаемые токенизаторы
+    Словарь строится явно - по убыванию частоты, при равенстве по алфавиту: обучаемые токенизаторы
     библиотеки tokenizers разрешают ничьи в случайном порядке, и тест был бы невоспроизводим."""
     import re
     from collections import Counter

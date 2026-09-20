@@ -4,8 +4,8 @@
 Ноутбук 03 обучает энкодер и сохраняет в одну папку модель (model/), вектора объявлений
 и вектора запросов. Ноутбук 04 ищет эту папку по порядку:
   1. переменная окружения EMB_DIR (или настройка EMB_DIR в первой ячейке ноутбука);
-  2. <папка артефактов>/embeddings — туда её кладёт ноутбук 03 на той же машине;
-  3. на Kaggle — любая подключённая папка внутри /kaggle/input.
+  2. <папка артефактов>/embeddings - туда её кладёт ноутбук 03 на той же машине;
+  3. на Kaggle - любая подключённая папка внутри /kaggle/input.
 """
 import os
 from pathlib import Path
@@ -16,7 +16,7 @@ MARKER = "item_embeddings.npy"
 
 
 def find_embeddings_dir(required: bool = True, name: str = "embeddings"):
-    """name — папка артефакта внутри WORK_DIR (v6: embeddings_v6)."""
+    """name - папка артефакта внутри WORK_DIR (v6: embeddings_v6)."""
     env = os.environ.get("EMB_DIR")
     candidates = [Path(env)] if env else []
     candidates.append(get_work_dir() / name)

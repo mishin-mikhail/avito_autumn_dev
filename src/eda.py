@@ -2,7 +2,7 @@
 EDA: ответы на вопросы, от которых зависят решения.
 
 Каждая функция печатает короткую сводку и возвращает словарь с ключевыми
-числами — часть из них дальше используется в пайплайне автоматически.
+числами - часть из них дальше используется в пайплайне автоматически.
 """
 import numpy as np
 import pandas as pd
@@ -95,7 +95,7 @@ def filters(train: pd.DataFrame, bench_q: pd.DataFrame, sample_size: int, seed: 
 def categories(train: pd.DataFrame, bench_items: pd.DataFrame) -> dict:
     section("Категории")
     print(f"категорий поиска: {train['search_category'].nunique()} "
-          f"(самая частая — {train['search_category'].value_counts(normalize=True).iloc[0]:.4f} строк)")
+          f"(самая частая - {train['search_category'].value_counts(normalize=True).iloc[0]:.4f} строк)")
     print(f"микрокатегорий в train: {train['item_microcat_id'].nunique()}; объявлений корпуса "
           f"в незнакомых train микрокатегориях: "
           f"{(~bench_items['item_microcat_id'].isin(pd.Index(train['item_microcat_id'].unique()))).mean():.3f}")

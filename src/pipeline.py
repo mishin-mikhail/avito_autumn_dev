@@ -1,9 +1,9 @@
 """
 Сквозной пайплайн: корпус → статистики из train → запросы → пул кандидатов с признаками.
 
-* build_stage   — всё сразу для одного набора запросов (ноутбук v2);
-* build_index   — только индекс корпуса (v3: один корпус на валидацию и все фолды ранкера);
-* build_pool    — статистики + пул для набора запросов поверх готового индекса.
+* build_stage   - всё сразу для одного набора запросов (ноутбук v2);
+* build_index   - только индекс корпуса (v3: один корпус на валидацию и все фолды ранкера);
+* build_pool    - статистики + пул для набора запросов поверх готового индекса.
 Результат build_stage = build_index + build_pool без расширения, то есть в точности v2.
 """
 from dataclasses import dataclass
@@ -43,7 +43,7 @@ class ItemLemmaCache:
         self._store: dict = {}          # поле → {item_id: строка лемм}
 
     def clear(self) -> None:
-        """Освободить память, когда все индексы корпуса уже построены (леммы описаний — сотни МБ)."""
+        """Освободить память, когда все индексы корпуса уже построены (леммы описаний - сотни МБ)."""
         self._store.clear()
 
     def _raw(self, field: str, items: pd.DataFrame) -> list:
@@ -94,9 +94,9 @@ def build_pool(name: str, corpus: Corpus, items: pd.DataFrame, queries: pd.DataF
                stats_rows: pd.DataFrame, *, lem, vocabs: Vocabs, cfg, use_item_stats: bool,
                truth: list = None, ext_cfg=None, query_emb=None, text_index=None, verbose: bool = True):
     """
-    stats_rows — строки train, по которым считаются статистики (без строк самих запросов!);
-    truth      — эталон: добавляет в пул колонку label;
-    text_index — knn_prior.TextIndex (v5): включает P(микрокатегория) по похожим запросам;
+    stats_rows - строки train, по которым считаются статистики (без строк самих запросов!);
+    truth      - эталон: добавляет в пул колонку label;
+    text_index - knn_prior.TextIndex (v5): включает P(микрокатегория) по похожим запросам;
                  тогда в stats_rows нужна колонка qtext.
     Возвращает (QuerySet, пул).
     """

@@ -7,7 +7,7 @@
   * любой отбор топ-K идёт по ключу (округлённый скор по убыванию, item_id по возрастанию),
     поэтому «случайных» ничьих нет;
   * разбиения делаются по md5 от ключа, а не через встроенный hash();
-  * сэмплирование — только через явный np.random.default_rng(seed).
+  * сэмплирование - только через явный np.random.default_rng(seed).
 """
 import hashlib
 import os
@@ -65,13 +65,13 @@ def file_md5(path) -> str:
 
 
 def library_versions() -> dict:
-    """Версии ключевых библиотек — печатаем в логе и фиксируем в README."""
+    """Версии ключевых библиотек - печатаем в логе и фиксируем в README."""
     import importlib
     import platform
     out = {"python": platform.python_version()}
     for name in ("numpy", "pandas", "scipy", "sklearn", "pyarrow", "pymorphy3", "lightgbm", "torch"):
         try:
             out[name] = importlib.import_module(name).__version__
-        except Exception:  # noqa: BLE001 — модуль может отсутствовать
+        except Exception:  # noqa: BLE001 - модуль может отсутствовать
             out[name] = None
     return out

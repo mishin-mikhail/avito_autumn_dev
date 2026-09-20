@@ -3,9 +3,9 @@
 
 Порядок поиска данных:
   1. переменная окружения DATA_DIR;
-  2. на Kaggle — первая (в отсортированном порядке) папка внутри /kaggle/input,
+  2. на Kaggle - первая (в отсортированном порядке) папка внутри /kaggle/input,
      где лежат все три parquet-файла (имя датасета в код не зашито);
-  3. локально — <корень репозитория>/data.
+  3. локально - <корень репозитория>/data.
 """
 import os
 from pathlib import Path
@@ -27,7 +27,7 @@ def _has_all_files(d: Path) -> bool:
 def _find_dirs_with(root: Path, filename: str, max_depth: int = 6) -> list:
     """Папки внутри root, где есть filename.
     os.walk(followlinks=True): Kaggle монтирует датасеты через симлинки, а Path.rglob
-    в Python < 3.13 в симлинки на папки не заходит. Результат сортируется — выбор детерминирован."""
+    в Python < 3.13 в симлинки на папки не заходит. Результат сортируется - выбор детерминирован."""
     found = []
     root_depth = len(root.parts)
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
@@ -87,7 +87,7 @@ def get_work_dir() -> Path:
 
 
 def get_output_dir() -> Path:
-    """Куда кладётся answer.csv (на Kaggle — прямо в /kaggle/working для скачивания)."""
+    """Куда кладётся answer.csv (на Kaggle - прямо в /kaggle/working для скачивания)."""
     env = os.environ.get("OUTPUT_DIR")
     if env:
         d = Path(env)

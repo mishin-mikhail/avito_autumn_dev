@@ -7,11 +7,11 @@
   * есть ли у запроса фильтры;
   * тип локации поиска: «обычная» (бывает у объявлений) или «только поисковая»
     (региональный id, у объявлений не встречается).
-Доли ячеек берутся из бенчмарка, отбор внутри ячейки — по md5 (детерминированно).
+Доли ячеек берутся из бенчмарка, отбор внутри ячейки - по md5 (детерминированно).
 
 Как получаются «новые» и «знакомые» запросы:
   * доля text_holdout_frac текстов убирается из train целиком → кандидаты в новые;
-  * знакомые — группы, чей текст остаётся в train в других группах.
+  * знакомые - группы, чей текст остаётся в train в других группах.
 """
 import numpy as np
 import pandas as pd
@@ -48,10 +48,10 @@ def build_validation_split(train: pd.DataFrame, bench_q: pd.DataFrame, n_val: in
                            text_holdout_frac: float, salt: str):
     """
     Возвращает:
-      val_keys   — query_key валидационных запросов (в md5-порядке);
-      val_seen   — словарь query_key → «знакомый»/«новый»;
-      fold_mask  — булев массив по строкам train: True = строка идёт в train-фолд;
-      report     — таблица «цель vs факт» по ячейкам стратификации.
+      val_keys   - query_key валидационных запросов (в md5-порядке);
+      val_seen   - словарь query_key → «знакомый»/«новый»;
+      fold_mask  - булев массив по строкам train: True = строка идёт в train-фолд;
+      report     - таблица «цель vs факт» по ячейкам стратификации.
     """
     # 1. тексты, целиком убранные из train
     texts = pd.unique(train["norm_text"].to_numpy(dtype=object))
@@ -84,7 +84,7 @@ def build_validation_split(train: pd.DataFrame, bench_q: pd.DataFrame, n_val: in
 
     report = pd.DataFrame(rows, columns=["текст", "страта", "цель", "факт"])
     if (report["факт"] < report["цель"]).any():
-        print("[warn] в некоторых ячейках не хватило групп — см. таблицу")
+        print("[warn] в некоторых ячейках не хватило групп - см. таблицу")
 
     seen_keys = pd.Index(picked.loc[picked["seg_text"] == SEEN, "query_key"])
     fold_mask = ~(row_holdout | train["query_key"].isin(seen_keys).to_numpy())

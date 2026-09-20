@@ -73,7 +73,7 @@ def process_rss_gb() -> float:
 
 
 def memory_status(tag: str) -> None:
-    """Отметка о памяти по ходу ноутбука — чтобы при нехватке было видно, на каком шаге она кончилась."""
+    """Отметка о памяти по ходу ноутбука - чтобы при нехватке было видно, на каком шаге она кончилась."""
     import gc
     gc.collect()
     mem = memory_gb()
@@ -87,6 +87,6 @@ def resources_report(work_dir, need_ram_gb: float, need_disk_gb: float) -> None:
     print(f"RAM: {mem['available']} ГБ свободно из {mem['total']} | диск в {work_dir}: {disk:.0f} ГБ свободно | "
           f"ядер CPU: {os.cpu_count()}")
     if mem["available"] < need_ram_gb:
-        print(f"[warn] ноутбуку нужно около {need_ram_gb} ГБ RAM — возможна нехватка памяти")
+        print(f"[warn] ноутбуку нужно около {need_ram_gb} ГБ RAM - возможна нехватка памяти")
     if disk < need_disk_gb:
         print(f"[warn] ноутбуку нужно около {need_disk_gb} ГБ на диске")

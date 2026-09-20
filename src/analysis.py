@@ -17,7 +17,7 @@ def attach_labels(pool: pd.DataFrame, corpus, truth: list) -> pd.DataFrame:
 
 
 def pool_hit_rate(pool: pd.DataFrame, n_rel: np.ndarray) -> np.ndarray:
-    """Доля эталона, попавшая в пул, — по каждому запросу."""
+    """Доля эталона, попавшая в пул, - по каждому запросу."""
     hits = np.bincount(pool.loc[pool["label"] == 1, "q"], minlength=len(n_rel))
     return hits / np.maximum(n_rel, 1)
 

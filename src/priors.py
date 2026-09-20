@@ -63,7 +63,7 @@ class MicrocatPrior:
         return self
 
     def text_counts(self, lemma_key: list) -> np.ndarray:
-        """Сколько строк статистик приходится на каждый «мешок лемм» (0 — текст новый)."""
+        """Сколько строк статистик приходится на каждый «мешок лемм» (0 - текст новый)."""
         totals = np.asarray(self.C_text.sum(axis=1)).ravel()
         return np.array([totals[self.text_index[k]] if k in self.text_index else 0.0 for k in lemma_key])
 

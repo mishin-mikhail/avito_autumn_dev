@@ -2,7 +2,7 @@
 Загрузка и приведение данных к единому виду.
 
 Ключевые решения:
-  * все идентификаторы (item_id, локации, категории) — строки; числовые id
+  * все идентификаторы (item_id, локации, категории) - строки; числовые id
     приводятся к строке без «.0», чтобы search_location_id и item_location_id
     сравнивались корректно при любых dtype в parquet;
   * «запрос» = группа строк train с одинаковыми признаками запроса
@@ -99,21 +99,21 @@ def load_train(data_dir, with_description: bool = False) -> pd.DataFrame:
     path = data_dir / "train.parquet"
     cols = parquet_columns(path)
     if "item_id" not in cols:
-        raise ValueError("В train.parquet нет item_id — нужна другая схема валидации, см. README.")
+        raise ValueError("В train.parquet нет item_id - нужна другая схема валидации, см. README.")
     use = [c for c in cols if with_description or c != "item_description_raw"]
     df = pd.read_parquet(path, columns=use)
     return prepare_item_columns(prepare_query_columns(df))
 
 
 def load_train_items_text(data_dir, item_ids) -> pd.DataFrame:
-    """Полные признаки (с описанием) только для заданных item_id — экономит память."""
+    """Полные признаки (с описанием) только для заданных item_id - экономит память."""
     path = data_dir / "train.parquet"
     item_cols = [c for c in parquet_columns(path) if c.startswith("item_")]
     ids = sorted(dict.fromkeys(item_ids))
     df = pd.read_parquet(path, columns=item_cols, filters=[("item_id", "in", ids)])
     df = prepare_item_columns(df)
     # у одного объявления в разных строках train признаки могут отличаться (объявление
-    # редактировали); берём первую строку в порядке файла — это детерминированно
+    # редактировали); берём первую строку в порядке файла - это детерминированно
     return df.drop_duplicates("item_id", keep="first").reset_index(drop=True)
 
 

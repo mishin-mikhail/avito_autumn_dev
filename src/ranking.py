@@ -66,7 +66,7 @@ class PoolData:
         self.n_rel = n_rel
 
     def recall(self, w, k, decimals, query_mask=None) -> float:
-        """query_mask — булев массив по запросам: считать только эти запросы."""
+        """query_mask - булев массив по запросам: считать только эти запросы."""
         if query_mask is None:
             return pool_recall(self.q, self.rank, self.label, self.n_rel,
                                linear_score(self.F, w), k, decimals)
@@ -99,7 +99,7 @@ def coordinate_ascent(data: PoolData, w0, grid, passes, k, decimals, query_mask=
 
 
 def half_split_cv(data: PoolData, w0, grid, passes, k, decimals) -> dict:
-    """Честная оценка подбора весов: учим на чётных запросах — меряем на нечётных, и наоборот.
+    """Честная оценка подбора весов: учим на чётных запросах - меряем на нечётных, и наоборот.
     Запросы идут в md5-порядке, поэтому половины случайны и сбалансированы."""
     odd = np.arange(len(data.n_rel)) % 2 == 1
     out = {}
@@ -112,7 +112,7 @@ def half_split_cv(data: PoolData, w0, grid, passes, k, decimals) -> dict:
 def predict_from_scores(pool: pd.DataFrame, corpus, score: np.ndarray, k: int, decimals: int,
                         n_queries: int) -> list:
     """Топ-k item_id для каждого запроса по готовому скору строк пула.
-    Если в пуле меньше k кандидатов — добор популярными объявлениями."""
+    Если в пуле меньше k кандидатов - добор популярными объявлениями."""
     q = pool["q"].to_numpy(np.int64)
     items = pool["item"].to_numpy(np.int64)
     order, sel = topk_mask(q, corpus.rank[items], score, k, decimals)

@@ -2,12 +2,12 @@
 Выборки запросов из train для v3: валидация и фолды ранкера.
 
 Общий принцип тот же, что в validation.py (v2), с тремя отличиями:
-  * «новые» запросы берутся по одному на текст — в бенчмарке новые тексты
+  * «новые» запросы берутся по одному на текст - в бенчмарке новые тексты
     почти всегда редкие и уникальные, а выбор по группам перекашивал выборку
     в сторону популярных текстов;
-  * можно ограничить кандидатов (eligible) — например, запросами, чьи выбранные
+  * можно ограничить кандидатов (eligible) - например, запросами, чьи выбранные
     объявления лежат в корпусе бенчмарка (схема «в корпусе»);
-  * разбиение строится поверх base_mask — строк, уже доступных для статистик
+  * разбиение строится поверх base_mask - строк, уже доступных для статистик
     (так фолды ранкера не пересекаются с валидацией).
 """
 from dataclasses import dataclass
@@ -47,14 +47,14 @@ def sample_queries(name: str, train: pd.DataFrame, groups: pd.DataFrame, target:
                    base_mask: np.ndarray, eligible: pd.Index, holdout_frac: float, salt: str,
                    uniform_unseen: bool = False) -> QuerySample:
     """
-    target    — число запросов в каждой ячейке (seg_text, stratum);
-    base_mask — строки train, доступные этой выборке;
-    eligible  — ключи групп, из которых можно выбирать запросы;
-    uniform_unseen — как выбирать «новые» запросы (v4: True, v3: False):
-        False — в порядке хеша группы: у текста со многими группами больше шансов попасть
+    target    - число запросов в каждой ячейке (seg_text, stratum);
+    base_mask - строки train, доступные этой выборке;
+    eligible  - ключи групп, из которых можно выбирать запросы;
+    uniform_unseen - как выбирать «новые» запросы (v4: True, v3: False):
+        False - в порядке хеша группы: у текста со многими группами больше шансов попасть
                 в выборку, поэтому «новыми» оказываются в основном популярные тексты;
-        True  — в порядке хеша текста: все отложенные тексты равновероятны, и «новые» запросы,
-                как в бенчмарке, — в основном редкие тексты из длинного хвоста.
+        True  - в порядке хеша текста: все отложенные тексты равновероятны, и «новые» запросы,
+                как в бенчмарке, - в основном редкие тексты из длинного хвоста.
     """
     base = train.loc[base_mask, ["query_key", "norm_text"]]
     base_texts = pd.unique(base["norm_text"].to_numpy(dtype=object))
@@ -87,7 +87,7 @@ def sample_queries(name: str, train: pd.DataFrame, groups: pd.DataFrame, target:
     picked = pd.concat(picked).sort_values(["h", "query_key"], kind="stable")
     report = pd.DataFrame(rows, columns=["текст", "страта", "цель", "факт"])
     if (report["факт"] < report["цель"]).any():
-        print(f"[warn] {name}: в некоторых ячейках не хватило запросов — "
+        print(f"[warn] {name}: в некоторых ячейках не хватило запросов - "
               f"{report['факт'].sum()} из {report['цель'].sum()}")
 
     seen_keys = pd.Index(picked.loc[picked["seg_text"] == SEEN, "query_key"])
@@ -108,13 +108,13 @@ def bench_targets(bench_q: pd.DataFrame, n: int) -> pd.Series:
 
 def scheme_keys(groups: pd.DataFrame) -> dict:
     """Из каких групп-запросов можно брать запросы в каждой схеме валидации:
-    injected — любые; in_corpus — только те, чьи выбранные объявления лежат в корпусе бенчмарка."""
+    injected - любые; in_corpus - только те, чьи выбранные объявления лежат в корпусе бенчмарка."""
     return {"injected": pd.Index(groups["query_key"]),
             "in_corpus": pd.Index(groups.loc[groups["in_corpus"], "query_key"])}
 
 
 def build_validation(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.DataFrame, rcfg) -> dict:
-    """Валидация обеих схем. Одна соль — одни и те же убранные из train тексты."""
+    """Валидация обеих схем. Одна соль - одни и те же убранные из train тексты."""
     target = bench_targets(bench_q, rcfg.n_val_queries)
     all_rows = np.ones(len(train), dtype=bool)
     return {name: sample_queries(f"валидация {name}", train, groups, target, all_rows, keys,
@@ -138,8 +138,8 @@ def build_folds(train: pd.DataFrame, groups: pd.DataFrame, bench_q: pd.DataFrame
 
 def picked_rows_mask(train: pd.DataFrame, samples) -> np.ndarray:
     """
-    Строки train, относящиеся к самим выбранным запросам: у «новых» — все строки их текста,
-    у «знакомых» — строки их группы. Эти строки нельзя давать энкодеру при дообучении,
+    Строки train, относящиеся к самим выбранным запросам: у «новых» - все строки их текста,
+    у «знакомых» - строки их группы. Эти строки нельзя давать энкодеру при дообучении,
     иначе на валидации и фолдах он «узнает» свои обучающие пары и метрика будет завышена.
     (Отложенные тексты, которые ни в одну выборку не попали, энкодеру не мешают.)
     """
